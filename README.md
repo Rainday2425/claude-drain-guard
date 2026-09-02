@@ -4,6 +4,12 @@
 
 A zero-dependency VS Code extension that watches Claude Code locally, aggregates five-minute slices, and tells you to stop after the first anomalous prompt—before the next few prompts drain the session.
 
+## Install or update
+
+Install **Claude Drain Guard 0.8.1** from the Visual Studio Marketplace, or open **Extensions: Install from VSIX...** in VS Code and select the `0.8.1` VSIX package.
+
+Marketplace releases are immutable: an uploaded `0.8.0` package cannot be replaced. If you installed or uploaded `0.8.0`, use `0.8.1` for the finalized dashboard and cache-collapse calibration.
+
 ## Status bar
 
 Five-hour usage and cache hit stay visible in a small item on the right. A separate state indicator sits beside it:
@@ -24,7 +30,7 @@ Quota display adapts to the available data: Claude.ai 5h/7d, 5h-only, stale quot
 - Short EWMA acceleration against the user's own rolling baseline
 - Page-Hinkley change points and one-sided CUSUM for sustained drain
 - Multivariate risk scoring across fresh input, cache write, output, cache deficit and cache cliffs
-- Baselines segmented by model, project, context bucket and cache state
+- Baselines segmented by model, project and context bucket, so a warm-to-cold cache collapse is compared with the correct historical workload
 - Deterministic bootstrap 30-minute burn forecast with p50/p90 bounds
 - Hysteresis and notification cooldown to suppress alert flapping
 - Compact status bar: `5m fresh tokens · cache hit · risk score`
@@ -54,6 +60,8 @@ No prompts, source code, credentials, or telemetry are collected. Local anomaly 
 ## Development
 
 Open this folder in VS Code and press `F5`. Run `node --test test/*.test.js` for the detector tests.
+
+To create a Marketplace package, increment `version` in `package.json` for every release, then run `npx @vscode/vsce package --no-dependencies`. Never reuse a version that has already been uploaded.
 
 ## Commands
 

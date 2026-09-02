@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+- Published the finalized dashboard, default live 5h/7d usage, and corrected cache-collapse scoring as a new immutable Marketplace version.
+
 ## 0.8.0
 
 - Added adaptive Claude.ai 5h/7d, 5h-only, stale, local, API-key, and Bedrock status formats.

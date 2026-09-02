@@ -2,7 +2,7 @@
   "name": "claude-drain-guard",
   "displayName": "Claude Drain Guard",
   "description": "Real-time, five-minute Claude Code drain and prompt-cache anomaly alerts.",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "publisher": "Givemepaw233",
   "license": "MIT",
   "icon": "images/icon.png",

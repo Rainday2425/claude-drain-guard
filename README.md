@@ -6,11 +6,11 @@ A zero-dependency VS Code extension that watches Claude Code locally, aggregates
 
 ## Status bar
 
-Three independently hideable items keep healthy sessions quiet and make danger obvious:
+One progressive status item keeps healthy sessions quiet and makes danger obvious:
 
-- `SAFE`, `WATCH`, or `STOP` — the action to take now
-- `5h 39%` — authoritative allowance when the optional quota adapter is enabled
-- `Cache 97%` — the latest prompt-cache hit rate
+- Healthy: `5h 31% · Cache 97%`
+- Warning: `WATCH · Cache 54%`
+- Critical: `STOP · 5h +5.1%`
 
 ## Signals
 

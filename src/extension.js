@@ -23,15 +23,11 @@ class DrainGuard {
     this.alertState = { level: 'healthy', healthyStreak: 0 };
     this.scanTimer = null;
     const alignment = this.config.alignment === 'left' ? vscode.StatusBarAlignment.Left : vscode.StatusBarAlignment.Right;
-    this.healthStatus = vscode.window.createStatusBarItem('claudeDrainGuard.health', alignment, 92);
-    this.quotaStatus = vscode.window.createStatusBarItem('claudeDrainGuard.quota', alignment, 91);
-    this.cacheStatus = vscode.window.createStatusBarItem('claudeDrainGuard.cache', alignment, 90);
-    this.healthStatus.name = 'Claude Guard: health';
-    this.quotaStatus.name = 'Claude Guard: five-hour quota';
-    this.cacheStatus.name = 'Claude Guard: prompt cache';
-    for (const item of [this.healthStatus, this.quotaStatus, this.cacheStatus]) {
-      item.command = 'claudeDrainGuard.showDetails'; item.show(); context.subscriptions.push(item);
-    }
+    this.status = vscode.window.createStatusBarItem('claudeDrainGuard.status', alignment, 92);
+    this.status.name = 'Claude Drain Guard';
+    this.status.command = 'claudeDrainGuard.showDetails';
+    this.status.show();
+    context.subscriptions.push(this.status);
   }
 
   readConfig() {
@@ -157,29 +153,24 @@ class DrainGuard {
 
   render(turn, analysis) {
     if (!turn) {
-      this.healthStatus.text = '$(shield) Claude: idle';
-      this.healthStatus.tooltip = `Waiting for Claude Code activity in ${this.config.dataDirectory}`;
-      this.quotaStatus.hide(); this.cacheStatus.hide();
+      this.status.text = '$(shield) Guard · idle';
+      this.status.tooltip = `Claude Drain Guard\nWaiting for Claude Code activity.`;
+      this.status.backgroundColor = undefined;
       return;
     }
     const risk = analysis.displayRisk || analysis.risk;
-    const icon = risk === 'critical' ? '$(flame)' : risk === 'warning' ? '$(warning)' : '$(shield-check)';
     const quota = this.state.quotaSnapshots.at(-1);
     const delta = quota?.delta5h;
-    this.healthStatus.text = risk === 'critical'
-      ? `${icon} STOP${delta !== null && delta !== undefined ? ` · +${(delta * 100).toFixed(1)}%` : ''}`
-      : risk === 'warning' ? `${icon} WATCH · ${Math.round(analysis.score || 0)}` : `${icon} SAFE`;
-    this.healthStatus.backgroundColor = risk === 'critical' ? new vscode.ThemeColor('statusBarItem.errorBackground') : risk === 'warning' ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
-    this.cacheStatus.text = `$(database) Cache ${turn.cacheHit.toFixed(0)}%`;
-    this.cacheStatus.color = turn.cacheHit < 60 ? new vscode.ThemeColor('errorForeground') : turn.cacheHit < 80 ? new vscode.ThemeColor('editorWarning.foreground') : undefined;
-    this.cacheStatus.show();
-    if (quota) {
-      this.quotaStatus.text = `$(dashboard) 5h ${(quota.utilization5h * 100).toFixed(0)}%`;
-      this.quotaStatus.color = quota.utilization5h >= 0.9 ? new vscode.ThemeColor('errorForeground') : quota.utilization5h >= 0.7 ? new vscode.ThemeColor('editorWarning.foreground') : undefined;
-      this.quotaStatus.show();
-    } else this.quotaStatus.hide();
+    const quotaPart = quota ? `5h ${(quota.utilization5h * 100).toFixed(0)}%` : '5h —';
+    this.status.text = risk === 'critical'
+      ? `$(error) STOP · ${delta !== null && delta !== undefined ? `5h +${(delta * 100).toFixed(1)}%` : `Cache ${turn.cacheHit.toFixed(0)}%`}`
+      : risk === 'warning'
+        ? `$(warning) WATCH · Cache ${turn.cacheHit.toFixed(0)}%`
+        : `$(shield-check) ${quotaPart} · Cache ${turn.cacheHit.toFixed(0)}%`;
+    this.status.backgroundColor = risk === 'critical' ? new vscode.ThemeColor('statusBarItem.errorBackground') : risk === 'warning' ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+    this.status.color = undefined;
     const tooltip = this.tooltip(turn, analysis);
-    this.healthStatus.tooltip = tooltip; this.quotaStatus.tooltip = tooltip; this.cacheStatus.tooltip = tooltip;
+    this.status.tooltip = tooltip;
   }
 
   tooltip(turn, analysis) {
@@ -187,15 +178,15 @@ class DrainGuard {
     const issues = (analysis.alerts || []).map(a => `- **${a.code}** — ${a.text}`).join('\n') || 'No anomaly detected.';
     const quota = this.state.quotaSnapshots.at(-1);
     const risk = analysis.displayRisk || analysis.risk;
-    const heading = risk === 'critical' ? '🔥 STOP — drain detected' : risk === 'warning' ? '⚠️ WATCH — unusual activity' : '✅ SAFE — no drain detected';
+    const heading = risk === 'critical' ? 'STOP — drain detected' : risk === 'warning' ? 'WATCH — unusual activity' : 'Healthy';
     const quotaRow = quota ? `${(quota.utilization5h * 100).toFixed(1)}%${quota.delta5h === null || quota.delta5h === undefined ? '' : ` (+${(quota.delta5h * 100).toFixed(1)} pts / 5m)`}` : this.config.quotaEnabled ? 'Unavailable' : 'Off';
     const next = analysis.forecast ? `${compact(analysis.forecast.p50)} median / ${compact(analysis.forecast.p90)} p90` : 'Learning';
     const markdown = new vscode.MarkdownString(undefined, true);
-    markdown.appendMarkdown(`### ${heading}\n\n`);
-    if (risk === 'critical') markdown.appendMarkdown('**Do not submit another prompt until you inspect this incident.**\n\n');
-    markdown.appendMarkdown(`| Signal | Now | Meaning |\n|---|---:|---|\n| 5-hour quota | ${quotaRow} | Subscription allowance |\n| Prompt cache | ${turn.cacheHit.toFixed(1)}% | Higher is better |\n| Risk | ${Math.round(analysis.score || 0)}/100 | Combined anomaly score |\n| Current 5m | ${compact(slice?.fresh || 0)} fresh | ${slice?.calls || 0} calls |\n| Next 30m | ${next} | Bootstrap forecast |\n\n`);
-    markdown.appendMarkdown(`**Why**\n\n${issues}\n\n`);
-    markdown.appendMarkdown(`_${turn.model} · ${turn.project} · ${turn.contextBucket} context bucket_`);
+    markdown.appendMarkdown(`### Claude Drain Guard · ${heading}\n\n`);
+    if (risk === 'critical') markdown.appendMarkdown('**Pause before sending another prompt. Open the incident details first.**\n\n');
+    markdown.appendMarkdown(`| | Current |\n|---|---:|\n| **5-hour allowance** | ${quotaRow} |\n| **Cache hit** | ${turn.cacheHit.toFixed(1)}% |\n| **Five-minute fresh input** | ${compact(slice?.fresh || 0)} · ${slice?.calls || 0} calls |\n| **Risk score** | ${Math.round(analysis.score || 0)} / 100 |\n| **Next 30 minutes** | ${next} |\n\n`);
+    if (analysis.alerts?.length) markdown.appendMarkdown(`**What changed**\n\n${issues}\n\n`);
+    markdown.appendMarkdown(`---\n\n_${turn.model} · ${turn.project} · ${turn.contextBucket} context · click for recent activity_`);
     return markdown;
   }
 
@@ -231,8 +222,16 @@ class DrainGuard {
 
   showDetails() {
     const turns = this.state.turns.slice(-10).reverse();
-    const lines = turns.map(t => `${new Date(t.timestamp).toLocaleTimeString()}  cache ${t.cacheHit.toFixed(0)}%  fresh ${compact(t.fresh)}  out ${compact(t.output)}${t.alerts?.length ? `  ⚠ ${t.alerts.map(a => a.code).join(', ')}` : ''}`);
-    vscode.window.showQuickPick(lines.length ? lines : ['No Claude turns observed yet'], { title: 'Claude Drain Guard — latest turns', placeHolder: 'Five-minute slices are retained for 24 hours' });
+    const items = turns.map(t => ({
+      label: `${t.risk === 'critical' ? '$(error)' : t.risk === 'warning' ? '$(warning)' : '$(check)'} ${new Date(t.timestamp).toLocaleTimeString()} · ${t.risk === 'critical' ? 'Critical' : t.risk === 'warning' ? 'Watch' : 'Healthy'}`,
+      description: `Cache ${t.cacheHit.toFixed(0)}% · ${compact(t.fresh)} fresh`,
+      detail: `${t.model} · risk ${Math.round(t.riskScore || 0)}/100${t.alerts?.length ? ` · ${t.alerts.map(a => a.code).join(', ')}` : ''}`,
+      turn: t
+    }));
+    const actions = [{ label: '$(file-text) Generate incident report', description: 'Save evidence as Markdown', report: true }, ...items];
+    vscode.window.showQuickPick(actions, { title: 'Claude Drain Guard', placeHolder: 'Recent activity · five-minute slices retained for 24 hours', matchOnDescription: true, matchOnDetail: true }).then(selected => {
+      if (selected?.report) this.openReport();
+    });
   }
 }
 

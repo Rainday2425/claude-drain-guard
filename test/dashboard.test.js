@@ -19,3 +19,9 @@ test('dashboard renders metrics, controls, chart, and escaped anomaly evidence',
   assert.match(html, /&lt;cache collapse&gt;/);
   assert.doesNotMatch(html, /<cache collapse>/);
 });
+
+test('dashboard offers one-click usage connection when OAuth data is unavailable', () => {
+  const html = buildDashboard({ turns: [], slices: [], quotaSnapshots: [] }, { provider: 'unknown', quotaEnabled: true, cspSource: 'vscode-resource:', nonce: 'test' });
+  assert.match(html, /Waiting to connect/);
+  assert.match(html, /Connect live usage/);
+});

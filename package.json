@@ -2,7 +2,7 @@
   "name": "claude-drain-guard",
   "displayName": "Claude Drain Guard",
   "description": "Real-time, five-minute Claude Code drain and prompt-cache anomaly alerts.",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "publisher": "Givemepaw233",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -52,6 +52,10 @@
       {
         "command": "claudeDrainGuard.openDashboard",
         "title": "Claude Drain Guard: Open Dashboard"
+      },
+      {
+        "command": "claudeDrainGuard.connectUsage",
+        "title": "Claude Drain Guard: Connect Live Usage"
       },
       {
         "command": "claudeDrainGuard.generateReport",
@@ -135,7 +139,7 @@
         "claudeDrainGuard.authoritativeQuota.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Read authoritative 5h/7d rate-limit headers using a minimal Anthropic Messages request at most once per five minutes. Disable for local-only monitoring. This consumes a tiny amount of quota."
+          "description": "Read authoritative 5h/7d usage from Claude Code's OAuth usage endpoint or passively observe the official extension's response. No model prompt is sent. Disable for local-only monitoring."
         },
         "claudeDrainGuard.authoritativeQuota.credentialsPath": {
           "type": "string",

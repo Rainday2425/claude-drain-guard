@@ -35,7 +35,11 @@ function pageHinkley(value, previous = {}, options = {}) {
   const cumulative = (previous.cumulative || 0) + x - mean - delta;
   const minimum = Math.min(previous.minimum ?? 0, cumulative);
   const statistic = cumulative - minimum;
-  return { state: { count, mean, cumulative, minimum }, statistic, changed: count >= 6 && statistic > threshold };
+  const changed = count >= 6 && statistic > threshold;
+  // A change point is an event, not a permanent state. Start a fresh segment
+  // after emitting it so every later healthy turn is not reported as critical.
+  const state = changed ? { count: 0, mean: 0, cumulative: 0, minimum: 0 } : { count, mean, cumulative, minimum };
+  return { state, statistic, changed };
 }
 
 function cusum(z, previous = 0, drift = 0.5, threshold = 5) {
@@ -103,7 +107,8 @@ function transitionAlertState(previous = {}, risk, now = Date.now()) {
   const healthyStreak = risk === 'healthy' ? (previous.healthyStreak || 0) + 1 : 0;
   let level = previous.level || 'healthy';
   if (risk === 'critical') level = 'critical';
-  else if (risk === 'warning' && level !== 'critical') level = 'warning';
+  else if (risk === 'warning') level = 'warning';
+  else if (risk === 'healthy' && level === 'critical') level = 'warning';
   else if (healthyStreak >= 2) level = 'healthy';
   const shouldNotify = risk !== 'healthy' && (risk !== previous.lastNotifiedRisk || now - (previous.lastNotifiedAt || 0) >= 5 * 60_000);
   return { level, healthyStreak, lastNotifiedRisk: shouldNotify ? risk : previous.lastNotifiedRisk, lastNotifiedAt: shouldNotify ? now : previous.lastNotifiedAt, shouldNotify };

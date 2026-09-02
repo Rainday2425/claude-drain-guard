@@ -13,6 +13,7 @@ const { fetchQuota, quotaDelta, defaultCredentials } = require('./quota');
 const { recentJsonl, readJsonlIncrement } = require('./scanner');
 const { detectProvider, formatStatus } = require('./display');
 const { buildDashboard } = require('./dashboard');
+const { installUsageTap } = require('./usageTap');
 
 let guard;
 
@@ -33,7 +34,10 @@ class DrainGuard {
     this.seenIds = new Set(this.state.seen);
     this.scanPromise = null;
     const restored = this.state.turns.at(-1);
-    if (restored) this.lastAnalysis = { risk: restored.risk, displayRisk: restored.risk, alerts: restored.alerts || [], score: restored.riskScore || 0, signals: restored.signals || {} };
+    if (restored) {
+      const recent = Date.now() - restored.timestamp <= this.config.sliceMinutes * 60_000;
+      this.lastAnalysis = { risk: restored.risk, displayRisk: recent ? restored.risk : 'healthy', alerts: recent ? (restored.alerts || []) : [], score: recent ? (restored.riskScore || 0) : 0, signals: restored.signals || {} };
+    }
     const alignment = this.config.alignment === 'left' ? vscode.StatusBarAlignment.Left : vscode.StatusBarAlignment.Right;
     this.status = vscode.window.createStatusBarItem(alignment, 100);
     this.status.name = 'Claude Drain Guard';
@@ -49,6 +53,7 @@ class DrainGuard {
     this.alertStatus.tooltip = this.status.tooltip;
     this.alertStatus.show();
     context.subscriptions.push(this.status, this.alertStatus);
+    if (this.config.quotaEnabled) this.startUsageTap();
   }
 
   readConfig() {
@@ -69,7 +74,7 @@ class DrainGuard {
   }
 
   migrateDetectorState() {
-    if ((this.state.detectorVersion || 0) >= 2) return;
+    if ((this.state.detectorVersion || 0) >= 3) return;
     const groups = {};
     const turns = [...this.state.turns].sort((a, b) => a.timestamp - b.timestamp);
     for (const turn of turns) {
@@ -88,7 +93,7 @@ class DrainGuard {
     }
     this.state.turns = turns.slice(-500);
     this.state.groups = groups;
-    this.state.detectorVersion = 2;
+    this.state.detectorVersion = 3;
     this.store.scheduleSave(0);
   }
 
@@ -104,6 +109,12 @@ class DrainGuard {
       } else this.render(null, { risk: 'idle', alerts: [] });
       if (this.config.quotaEnabled) this.refreshQuota();
     });
+  }
+
+  startUsageTap() {
+    if (this.usageTap) return;
+    this.usageTap = installUsageTap(current => this.acceptQuota(current));
+    this.context.subscriptions.push({ dispose: () => { this.usageTap?.dispose(); this.usageTap = null; } });
   }
 
   startTimers() {
@@ -223,33 +234,41 @@ class DrainGuard {
     try {
       const current = await fetchQuota({ credentialsPath: defaultCredentials(this.config.dataDirectory, this.config.quotaCredentials) });
       this.quotaError = null;
-      const delta = quotaDelta(previous, current);
-      current.delta5h = delta;
-      this.state.quotaSnapshots.push(current);
-      this.state.quotaSnapshots = this.state.quotaSnapshots.slice(-288);
-      this.store.scheduleSave();
-      const turn = this.state.turns.at(-1);
-      if (turn && delta !== null) {
-        turn.quota5h = current.utilization5h;
-        turn.quotaDelta5h = delta;
-        if (delta >= this.config.quotaSpikePercent) {
-          const evidence = { severity: 'critical', code: 'QUOTA_SPIKE', text: `5m quota jumped ${(delta * 100).toFixed(1)} points` };
-          turn.alerts = [...(turn.alerts || []), evidence];
-          turn.risk = 'critical'; turn.riskScore = 100;
-          const analysis = { ...(this.lastAnalysis || {}), alerts: turn.alerts, risk: 'critical', displayRisk: 'critical', score: 100 };
-          this.render(turn, analysis);
-          if (Date.now() >= this.mutedUntil) this.alert(turn, analysis);
-        } else if (this.lastAnalysis) this.render(turn, this.lastAnalysis);
-      }
+      this.acceptQuota(current, previous);
     } catch (error) {
       this.quotaError = error instanceof Error ? error.message : String(error);
     } finally { this.quotaPending = false; this.updateDashboard(); }
   }
 
+  acceptQuota(current, previous = this.state.quotaSnapshots.at(-1)) {
+    this.quotaError = null;
+    this.provider = 'claude-ai';
+    const delta = quotaDelta(previous, current);
+    current.delta5h = delta;
+    this.state.quotaSnapshots.push(current);
+    this.state.quotaSnapshots = this.state.quotaSnapshots.slice(-288);
+    this.store.scheduleSave();
+    const turn = this.state.turns.at(-1);
+    if (!turn) { this.render(null, { risk: 'idle', alerts: [] }); return; }
+    turn.quota5h = current.utilization5h;
+    turn.quotaDelta5h = delta;
+    if (delta !== null && delta >= this.config.quotaSpikePercent) {
+      const evidence = { severity: 'critical', code: 'QUOTA_SPIKE', text: `5m quota jumped ${(delta * 100).toFixed(1)} points` };
+      turn.alerts = [...(turn.alerts || []).filter(alert => alert.code !== 'QUOTA_SPIKE'), evidence];
+      turn.risk = 'critical'; turn.riskScore = 100;
+      this.alertState = transitionAlertState(this.alertState, 'critical', current.timestamp);
+      const analysis = { ...(this.lastAnalysis || {}), alerts: turn.alerts, risk: 'critical', displayRisk: 'critical', score: 100, detectedAt: current.timestamp };
+      this.lastAnalysis = analysis;
+      this.render(turn, analysis);
+      if (!this.bootstrapping && Date.now() >= this.mutedUntil) this.alert(turn, analysis);
+    } else if (this.lastAnalysis) this.render(turn, this.lastAnalysis);
+  }
+
   render(turn, analysis) {
     if (!turn) {
-      this.status.text = '5h — · cache —';
-      this.status.tooltip = `Claude Drain Guard\nWaiting for Claude Code activity.`;
+      const quota = this.state.quotaSnapshots.at(-1);
+      this.status.text = quota ? formatStatus({ quota, cacheHit: undefined, provider: this.provider, quotaEnabled: this.config.quotaEnabled }) : '5h — · cache —';
+      this.status.tooltip = quota ? `Claude Drain Guard\nUsage is live. Waiting for local Claude Code token activity.` : `Claude Drain Guard\nWaiting for Claude Code usage and local activity.${this.quotaError ? `\n${this.quotaError}` : ''}`;
       this.status.backgroundColor = undefined;
       this.alertStatus.text = '$(circle-filled)';
       this.alertStatus.color = new vscode.ThemeColor('charts.blue');
@@ -295,7 +314,13 @@ class DrainGuard {
       const delta = quota.delta5h === null || quota.delta5h === undefined ? '' : ` · Δ${(quota.delta5h * 100).toFixed(1)} pts / 5m`;
       markdown.appendMarkdown(`5h ${(quota.utilization5h * 100).toFixed(1)}% · resets in ${formatReset(quota.reset5hAt)}${delta}\n\n`);
       if (Number.isFinite(quota.utilization7d)) markdown.appendMarkdown(`7d ${(quota.utilization7d * 100).toFixed(1)}% · resets in ${formatReset(quota.reset7dAt)}\n\n`);
-    } else markdown.appendMarkdown(`${this.config.quotaEnabled ? 'Quota unavailable' : 'Quota sampling off'} · ${this.provider}\n\n`);
+    } else {
+      markdown.appendMarkdown(`${this.config.quotaEnabled ? 'Usage waiting for Claude Code' : 'Quota sampling off'} · ${this.provider}\n\n`);
+      if (this.quotaError) {
+        markdown.appendText(`Direct source: ${this.quotaError}`);
+        markdown.appendMarkdown('\n\n');
+      }
+    }
     markdown.appendMarkdown(`cache ${turn.cacheHit.toFixed(0)}% · fresh ${compact(slice?.fresh || 0)} / 5m · ${slice?.calls || 0} calls\n\n`);
     if (analysis.alerts?.length) markdown.appendMarkdown(`${issues}\n\n`);
     markdown.appendMarkdown(`_${turn.model} · ${turn.project} · click for details and report_`);
@@ -387,10 +412,12 @@ class DrainGuard {
       if (message.action === 'enableQuota') {
         await vscode.workspace.getConfiguration('claudeDrainGuard').update('authoritativeQuota.enabled', true, vscode.ConfigurationTarget.Global);
         this.config.quotaEnabled = true;
+        this.startUsageTap();
         await this.refreshQuota(true);
         if (this.quotaError) vscode.window.showWarningMessage(`Claude usage unavailable: ${this.quotaError}`);
         this.updateDashboard();
       }
+      if (message.action === 'connectUsage') await this.connectUsage();
     });
     this.updateDashboard();
   }
@@ -400,10 +427,28 @@ class DrainGuard {
     this.dashboardPanel.webview.html = buildDashboard(this.state, {
       provider: this.provider,
       quotaEnabled: this.config.quotaEnabled,
+      displayRisk: this.lastAnalysis?.displayRisk || this.lastAnalysis?.risk,
       refreshIntervalSeconds: this.config.refreshIntervalSeconds,
       cspSource: this.dashboardPanel.webview.cspSource,
       nonce: crypto.randomBytes(16).toString('hex')
     });
+  }
+
+  async connectUsage() {
+    const official = vscode.extensions?.getExtension('anthropic.claude-code');
+    const executable = official && path.join(official.extensionPath, 'resources', 'native-binary', process.platform === 'win32' ? 'claude.exe' : 'claude');
+    if (!executable || !fs.existsSync(executable)) {
+      vscode.window.showWarningMessage('Install the official Anthropic Claude Code extension, then run Connect live usage again.');
+      return;
+    }
+    const terminal = vscode.window.createTerminal({ name: 'Claude usage login', shellPath: executable, shellArgs: ['auth', 'login'] });
+    const closed = vscode.window.onDidCloseTerminal(candidate => {
+      if (candidate !== terminal) return;
+      closed.dispose();
+      setTimeout(() => this.refreshQuota(true), 500);
+    });
+    this.context.subscriptions.push(closed);
+    terminal.show();
   }
 }
 
@@ -426,6 +471,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand('claudeDrainGuard.showDetails', () => guard.showDetails()),
     vscode.commands.registerCommand('claudeDrainGuard.openDashboard', () => guard.openDashboard()),
+    vscode.commands.registerCommand('claudeDrainGuard.connectUsage', () => guard.connectUsage()),
     vscode.commands.registerCommand('claudeDrainGuard.generateReport', () => guard.openReport()),
     vscode.commands.registerCommand('claudeDrainGuard.mute', () => { guard.mutedUntil = Date.now() + 15 * 60_000; }),
     vscode.commands.registerCommand('claudeDrainGuard.resetBaseline', () => { guard.state.turns = []; guard.state.slices = []; guard.store.save(); vscode.window.showInformationMessage('Claude Drain Guard baseline reset.'); })

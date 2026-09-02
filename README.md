@@ -6,9 +6,9 @@ A zero-dependency VS Code extension that watches Claude Code locally, aggregates
 
 ## Install or update
 
-Install **Claude Drain Guard 0.8.1** from the Visual Studio Marketplace, or open **Extensions: Install from VSIX...** in VS Code and select the `0.8.1` VSIX package.
+Install **Claude Drain Guard 0.8.2** from the Visual Studio Marketplace, or open **Extensions: Install from VSIX...** in VS Code and select the `0.8.2` VSIX package.
 
-Marketplace releases are immutable: an uploaded `0.8.0` package cannot be replaced. If you installed or uploaded `0.8.0`, use `0.8.1` for the finalized dashboard and cache-collapse calibration.
+Marketplace releases are immutable: an uploaded package cannot be replaced. Use `0.8.2` for the finalized dashboard, corrected cache-collapse state, and live OAuth usage fallback.
 
 ## Status bar
 
@@ -43,6 +43,8 @@ Quota display adapts to the available data: Claude.ai 5h/7d, 5h-only, stale quot
 
 Click the status item or run **Claude Drain Guard: Open Dashboard**. The native-themed dashboard shows 5h/7d usage, cache hit, five-minute fresh input, risk score, a 24-hour slice chart, and recent anomalies. It also provides one-click live-usage enablement, refresh interval controls, and incident reports. Prompt and response content is never shown.
 
+If `5h:—` remains visible, click **Connect live usage** in the dashboard. On setups where the official VS Code extension keeps its login isolated, this opens the bundled official Claude Code CLI for a one-time OAuth login; Claude Drain Guard never receives or stores the token itself.
+
 ![Claude Drain Guard dashboard](images/dashboard.png)
 
 ## Performance
@@ -53,7 +55,7 @@ Click the status item or run **Claude Drain Guard: Open Dashboard**. The native-
 - Appended data is streamed in 256 KB chunks; incomplete JSONL tails are preserved
 - State writes are asynchronous, atomic, and coalesced only after new data
 
-No prompts, source code, credentials, or telemetry are collected. Local anomaly monitoring remains independent of the network. Live 5h/7d usage is enabled by default: the adapter reads the existing Claude OAuth token in memory, makes at most one minimal 1-token Haiku request per five minutes, reads only rate-limit response headers, never persists the token, and falls back safely to local detection on failure. This request consumes a tiny amount of quota and can be disabled with `claudeDrainGuard.authoritativeQuota.enabled`.
+No prompts, source code, credentials, or telemetry are collected. Local anomaly monitoring remains independent of the network. Live 5h/7d usage is enabled by default: when a readable Claude OAuth token is available, the adapter makes a read-only `GET /api/oauth/usage` request at most once per five minutes. When Claude Code keeps its token private, the extension can passively observe the official VS Code extension's response for that exact Anthropic endpoint. No model prompt is sent, and the token is never logged or persisted. The feature can be disabled with `claudeDrainGuard.authoritativeQuota.enabled`.
 
 ![Native recent-activity picker with evidence](images/incident.png)
 
@@ -66,6 +68,7 @@ To create a Marketplace package, increment `version` in `package.json` for every
 ## Commands
 
 - `Claude Drain Guard: Open Dashboard`
+- `Claude Drain Guard: Connect Live Usage`
 - `Claude Drain Guard: Show Details`
 - `Claude Drain Guard: Generate Incident Report`
 - `Claude Drain Guard: Mute Alerts for 15 Minutes`

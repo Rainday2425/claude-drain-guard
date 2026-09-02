@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.2
+
+- Fixed a recovered 96% cache-hit turn remaining visually critical because of alert-state stickiness.
+- Reset Page-Hinkley after each detected change point to prevent repeated critical reports.
+- Switched live limits to the read-only OAuth usage endpoint, which sends no model prompt.
+- Added a zero-request fallback that observes the official Claude Code extension's usage response when its OAuth token is not readable.
+
 ## 0.8.1
 
 - Published the finalized dashboard, default live 5h/7d usage, and corrected cache-collapse scoring as a new immutable Marketplace version.

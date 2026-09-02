@@ -2,13 +2,45 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
-function readAccessToken(credentialsPath) {
+function readAccessToken(credentialsPath, env = process.env) {
+  const injected = env.CLAUDE_CODE_OAUTH_TOKEN?.trim();
+  if (injected) return injected;
   const parsed = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
   const oauth = parsed?.claudeAiOauth;
   if (!oauth?.accessToken) throw new Error('OAuth access token not found');
   if (oauth.expiresAt && oauth.expiresAt <= Date.now()) throw new Error('OAuth access token has expired; run claude login');
   return oauth.accessToken;
+}
+
+function normalizeUtilization(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  return number > 1 ? number / 100 : number;
+}
+
+function parseReset(value) {
+  if (typeof value === 'number') return value > 10_000_000_000 ? value : value * 1000;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric > 10_000_000_000 ? numeric : numeric * 1000;
+  const parsed = Date.parse(value || '');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parseOAuthUsage(payload, now = Date.now()) {
+  const five = normalizeUtilization(payload?.five_hour?.utilization);
+  if (five === null) throw new Error('Anthropic usage response did not include five_hour.utilization');
+  const seven = normalizeUtilization(payload?.seven_day?.utilization);
+  return {
+    timestamp: now,
+    utilization5h: five,
+    utilization7d: seven,
+    reset5hAt: parseReset(payload.five_hour?.resets_at),
+    reset7dAt: parseReset(payload.seven_day?.resets_at),
+    status: payload.five_hour?.status || (five >= 1 ? 'denied' : 'allowed'),
+    source: 'oauth-usage'
+  };
 }
 
 function parseQuotaHeaders(headers, now = Date.now()) {
@@ -33,13 +65,12 @@ async function fetchQuota(options) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs || 10_000);
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST', signal: controller.signal,
-      headers: { Authorization: `Bearer ${token}`, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'oauth-2025-04-20', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1, messages: [{ role: 'user', content: '.' }] })
+    const response = await fetch('https://api.anthropic.com/api/oauth/usage', {
+      method: 'GET', signal: controller.signal,
+      headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', accept: 'application/json' }
     });
-    // Rate-limit headers can be useful even when the body reports an error.
-    return parseQuotaHeaders(response.headers);
+    if (!response.ok) throw new Error(`Anthropic usage request failed (${response.status})`);
+    return parseOAuthUsage(await response.json());
   } finally { clearTimeout(timer); }
 }
 
@@ -50,7 +81,14 @@ function quotaDelta(previous, current) {
 }
 
 function defaultCredentials(dataDirectory, configured = '') {
-  return configured || path.join(dataDirectory, '.credentials.json');
+  if (configured) return configured;
+  const candidates = [
+    path.join(dataDirectory, '.credentials.json'),
+    path.join(os.homedir(), '.claude', '.credentials.json'),
+    path.join(os.homedir(), '.config', 'claude', '.credentials.json'),
+    path.join(os.homedir(), '.config', 'claude-code', '.credentials.json')
+  ];
+  return candidates.find(candidate => fs.existsSync(candidate)) || candidates[0];
 }
 
-module.exports = { readAccessToken, parseQuotaHeaders, fetchQuota, quotaDelta, defaultCredentials };
+module.exports = { readAccessToken, normalizeUtilization, parseReset, parseOAuthUsage, parseQuotaHeaders, fetchQuota, quotaDelta, defaultCredentials };

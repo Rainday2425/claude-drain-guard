@@ -29,7 +29,7 @@ function formatStatus({ quota, cacheHit, sliceFresh = 0, provider = 'unknown', q
     return `${parts.join(' ')} · ${cache}`;
   }
   if (provider === 'aws-bedrock' || provider === 'api-key') return `${cache} · 5m:${compact(sliceFresh)}`;
-  return `${cache} · ${quotaEnabled ? 'offline' : 'local'}`;
+  return quotaEnabled ? `5h:— · ${cache}` : `${cache} · local`;
 }
 
 module.exports = { detectProvider, ageLabel, formatStatus };

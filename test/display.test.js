@@ -14,5 +14,5 @@ test('status formats 5h, optional 7d, stale age, and cache', () => {
 test('local provider modes keep cache prominent', () => {
   assert.equal(formatStatus({ cacheHit: 91, sliceFresh: 12400, provider: 'api-key' }), 'cache:91% · 5m:12k');
   assert.equal(formatStatus({ cacheHit: 91, provider: 'unknown' }), 'cache:91% · local');
-  assert.equal(formatStatus({ cacheHit: 91, provider: 'unknown', quotaEnabled: true }), 'cache:91% · offline');
+  assert.equal(formatStatus({ cacheHit: 91, provider: 'unknown', quotaEnabled: true }), '5h:— · cache:91%');
 });

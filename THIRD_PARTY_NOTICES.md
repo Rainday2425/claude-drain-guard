@@ -1,6 +1,6 @@
 # Third-party notices
 
-The optional authoritative quota adapter follows the rate-limit-header technique documented and implemented by `long-910/vscode-claude-status`, Copyright (c) 2026 Small Long, licensed under the MIT License.
+The authoritative usage adapter follows the OAuth usage endpoint pattern documented by `ClaudeCodeUsage/ClaudeCodeUsage` and the diagnostics-channel observation pattern implemented by `Harsh1210/claude-usage-bar`, both distributed under the MIT License.
 
 Repository: https://github.com/long-910/vscode-claude-status
 

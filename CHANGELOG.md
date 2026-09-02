@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0
+
+- Added adaptive Claude.ai 5h/7d, 5h-only, stale, local, API-key, and Bedrock status formats.
+- Kept cache hit visible in every active status format.
+- Kept quota percentages informational: only drain-anomaly signals control the blue/yellow/red indicator.
+- Avoided inaccurate dollar estimates when the active model's pricing is unknown.
+
+## 0.7.1
+
+- Fixed the right-side usage and state items not appearing before the first valid usage record.
+- Added an explicit `5h — · cache —` idle state that renders immediately on activation.
+- Matched the stable two-argument status-item creation pattern used by `vscode-claude-status`.
+
 ## 0.7.0
 
 - Replaced repeated recursive scans with direct event-driven reads of changed JSONL files.

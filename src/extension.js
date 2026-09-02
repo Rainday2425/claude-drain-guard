@@ -10,6 +10,7 @@ const { Store } = require('./store');
 const { generateReport } = require('./report');
 const { fetchQuota, quotaDelta, defaultCredentials } = require('./quota');
 const { recentJsonl, readJsonlIncrement } = require('./scanner');
+const { detectProvider, formatStatus } = require('./display');
 
 let guard;
 
@@ -17,6 +18,7 @@ class DrainGuard {
   constructor(context) {
     this.context = context;
     this.config = this.readConfig();
+    this.provider = detectProvider(this.config.dataDirectory, this.config.quotaCredentials);
     this.store = new Store(path.join(context.globalStorageUri.fsPath, 'metrics.json'));
     this.state = this.store.load();
     this.bootstrapping = true;
@@ -28,13 +30,19 @@ class DrainGuard {
     this.seenIds = new Set(this.state.seen);
     this.scanPromise = null;
     const alignment = this.config.alignment === 'left' ? vscode.StatusBarAlignment.Left : vscode.StatusBarAlignment.Right;
-    this.status = vscode.window.createStatusBarItem('claudeDrainGuard.usage', alignment, 92);
+    this.status = vscode.window.createStatusBarItem(alignment, 100);
     this.status.name = 'Claude Drain Guard';
     this.status.command = 'claudeDrainGuard.showDetails';
+    this.status.text = '5h — · cache —';
+    this.status.tooltip = 'Claude Drain Guard\nWaiting for Claude Code activity.';
     this.status.show();
-    this.alertStatus = vscode.window.createStatusBarItem('claudeDrainGuard.alert', alignment, 91);
+    this.alertStatus = vscode.window.createStatusBarItem(alignment, 99);
     this.alertStatus.name = 'Claude Drain Guard alert';
     this.alertStatus.command = 'claudeDrainGuard.showDetails';
+    this.alertStatus.text = '$(circle-filled)';
+    this.alertStatus.color = new vscode.ThemeColor('charts.blue');
+    this.alertStatus.tooltip = this.status.tooltip;
+    this.alertStatus.show();
     context.subscriptions.push(this.status, this.alertStatus);
   }
 
@@ -63,7 +71,7 @@ class DrainGuard {
       if (turn && this.lastAnalysis) {
         this.lastAnalysis.forecast = bootstrapForecast(this.state.slices.slice(-12).map(slice => slice.fresh));
         this.render(turn, this.lastAnalysis);
-      }
+      } else this.render(null, { risk: 'idle', alerts: [] });
     });
   }
 
@@ -207,7 +215,7 @@ class DrainGuard {
 
   render(turn, analysis) {
     if (!turn) {
-      this.status.text = '5h —';
+      this.status.text = '5h — · cache —';
       this.status.tooltip = `Claude Drain Guard\nWaiting for Claude Code activity.`;
       this.status.backgroundColor = undefined;
       this.alertStatus.text = '$(circle-filled)';
@@ -218,8 +226,8 @@ class DrainGuard {
     }
     const risk = analysis.displayRisk || analysis.risk;
     const quota = this.state.quotaSnapshots.at(-1);
-    const quotaPart = quota ? `5h ${(quota.utilization5h * 100).toFixed(0)}%` : '5h —';
-    this.status.text = `${quotaPart} · cache ${turn.cacheHit.toFixed(0)}%`;
+    const slice = this.state.slices.at(-1);
+    this.status.text = formatStatus({ quota, cacheHit: turn.cacheHit, sliceFresh: slice?.fresh || 0, provider: this.provider, quotaEnabled: this.config.quotaEnabled });
     this.status.backgroundColor = undefined;
     this.status.color = undefined;
     const tooltip = this.tooltip(turn, analysis);
@@ -246,11 +254,15 @@ class DrainGuard {
     const issues = (analysis.alerts || []).map(a => a.text).join(' · ') || 'No anomaly detected';
     const quota = this.state.quotaSnapshots.at(-1);
     const risk = analysis.displayRisk || analysis.risk;
-    const heading = risk === 'critical' ? 'Critical drain risk' : risk === 'warning' ? 'Elevated usage' : 'Normal';
-    const quotaRow = quota ? `${(quota.utilization5h * 100).toFixed(1)}%${quota.delta5h === null || quota.delta5h === undefined ? '' : ` (+${(quota.delta5h * 100).toFixed(1)} pts / 5m)`}` : this.config.quotaEnabled ? 'Unavailable' : 'Off';
+    const heading = risk === 'critical' ? 'Critical drain anomaly' : risk === 'warning' ? 'Usage anomaly' : 'Normal';
     const markdown = new vscode.MarkdownString(undefined, true);
     markdown.appendMarkdown(`**Claude Drain Guard — ${heading}**\n\n`);
-    markdown.appendMarkdown(`5h ${quotaRow} · cache ${turn.cacheHit.toFixed(0)}% · fresh ${compact(slice?.fresh || 0)} / 5m\n\n`);
+    if (quota) {
+      const delta = quota.delta5h === null || quota.delta5h === undefined ? '' : ` · Δ${(quota.delta5h * 100).toFixed(1)} pts / 5m`;
+      markdown.appendMarkdown(`5h ${(quota.utilization5h * 100).toFixed(1)}% · resets in ${formatReset(quota.reset5hAt)}${delta}\n\n`);
+      if (Number.isFinite(quota.utilization7d)) markdown.appendMarkdown(`7d ${(quota.utilization7d * 100).toFixed(1)}% · resets in ${formatReset(quota.reset7dAt)}\n\n`);
+    } else markdown.appendMarkdown(`${this.config.quotaEnabled ? 'Quota unavailable' : 'Quota sampling off'} · ${this.provider}\n\n`);
+    markdown.appendMarkdown(`cache ${turn.cacheHit.toFixed(0)}% · fresh ${compact(slice?.fresh || 0)} / 5m · ${slice?.calls || 0} calls\n\n`);
     if (analysis.alerts?.length) markdown.appendMarkdown(`${issues}\n\n`);
     markdown.appendMarkdown(`_${turn.model} · ${turn.project} · click for details and report_`);
     return markdown;
@@ -329,6 +341,15 @@ class DrainGuard {
 function projectFromPath(file, projectsRoot) {
   const relative = path.relative(projectsRoot, file);
   return relative.split(path.sep)[0] || 'unknown';
+}
+
+function formatReset(timestamp) {
+  if (!timestamp) return 'unknown';
+  const minutes = Math.max(0, Math.ceil((timestamp - Date.now()) / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60), remainder = minutes % 60;
+  if (hours < 24) return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
 function activate(context) {

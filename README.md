@@ -14,6 +14,8 @@ Five-hour usage and cache hit stay visible in a small item on the right. A separ
 
 Click the item and select **Refresh every Ns** to set a 1–60 second background refresh interval. The default is 15 seconds; file changes still trigger an immediate incremental read.
 
+Quota display adapts to the available data: Claude.ai 5h/7d, 5h-only, stale quota, or local API/Bedrock usage. Cache hit remains visible in every active mode. The colored indicator is independent of the quota percentage: only cache, fresh-token, change-point, and sudden-drain anomaly signals change it.
+
 ## Signals
 
 - Per-turn cache hit and fresh-token spike

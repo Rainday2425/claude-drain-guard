@@ -9,6 +9,7 @@ const { analyzeTurn, bootstrapForecast, transitionAlertState, compact } = requir
 const { Store } = require('./store');
 const { generateReport } = require('./report');
 const { fetchQuota, quotaDelta, defaultCredentials } = require('./quota');
+const { recentJsonl, readJsonlIncrement } = require('./scanner');
 
 let guard;
 
@@ -22,12 +23,19 @@ class DrainGuard {
     this.mutedUntil = 0;
     this.alertState = { level: 'healthy', healthyStreak: 0 };
     this.scanTimer = null;
+    this.activeFiles = new Set();
+    this.pendingFiles = new Set();
+    this.seenIds = new Set(this.state.seen);
+    this.scanPromise = null;
     const alignment = this.config.alignment === 'left' ? vscode.StatusBarAlignment.Left : vscode.StatusBarAlignment.Right;
-    this.status = vscode.window.createStatusBarItem('claudeDrainGuard.status', alignment, 92);
+    this.status = vscode.window.createStatusBarItem('claudeDrainGuard.usage', alignment, 92);
     this.status.name = 'Claude Drain Guard';
     this.status.command = 'claudeDrainGuard.showDetails';
     this.status.show();
-    context.subscriptions.push(this.status);
+    this.alertStatus = vscode.window.createStatusBarItem('claudeDrainGuard.alert', alignment, 91);
+    this.alertStatus.name = 'Claude Drain Guard alert';
+    this.alertStatus.command = 'claudeDrainGuard.showDetails';
+    context.subscriptions.push(this.status, this.alertStatus);
   }
 
   readConfig() {
@@ -41,14 +49,43 @@ class DrainGuard {
       quotaEnabled: c.get('authoritativeQuota.enabled', false),
       quotaCredentials: c.get('authoritativeQuota.credentialsPath', ''),
       quotaSpikePercent: c.get('authoritativeQuota.sliceSpikePercent', 2) / 100,
-      alignment: c.get('statusBarAlignment', 'left')
+      refreshIntervalSeconds: c.get('refreshIntervalSeconds', 15),
+      alignment: c.get('statusBarAlignment', 'right')
     };
   }
 
   start() {
     this.watch();
-    this.scan();
-    this.bootstrapping = false;
+    this.startTimers();
+    this.reconcileFiles().finally(() => {
+      this.bootstrapping = false;
+      const turn = this.state.turns.at(-1);
+      if (turn && this.lastAnalysis) {
+        this.lastAnalysis.forecast = bootstrapForecast(this.state.slices.slice(-12).map(slice => slice.fresh));
+        this.render(turn, this.lastAnalysis);
+      }
+    });
+  }
+
+  startTimers() {
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+    const seconds = Math.max(1, Math.min(60, Number(this.config.refreshIntervalSeconds) || 15));
+    this.refreshTimer = setInterval(() => this.queueScan(this.activeFiles), seconds * 1000);
+    if (!this.discoveryTimer) this.discoveryTimer = setInterval(() => { this.reconcileFiles().catch(() => {}); }, 60_000);
+    this.context.subscriptions.push({ dispose: () => {
+      clearInterval(this.refreshTimer);
+      clearInterval(this.discoveryTimer);
+      clearTimeout(this.scanTimer);
+    } });
+  }
+
+  async reconcileFiles() {
+    const root = path.join(this.config.dataDirectory, 'projects');
+    const discovered = await recentJsonl(root);
+    const current = new Set(discovered);
+    for (const file of this.activeFiles) if (!current.has(file)) this.activeFiles.delete(file);
+    for (const file of current) this.activeFiles.add(file);
+    if (discovered.length) await this.queueScan(discovered);
   }
 
   watch() {
@@ -56,42 +93,57 @@ class DrainGuard {
     if (!fs.existsSync(projects)) { this.render(null, { risk: 'idle', alerts: [] }); return; }
     try {
       const watcher = fs.watch(projects, { recursive: true }, (_event, file) => {
-        if (!file || !file.endsWith('.jsonl')) return;
+        if (!file || !String(file).endsWith('.jsonl')) return;
+        const changed = path.resolve(projects, String(file));
+        this.activeFiles.add(changed);
         clearTimeout(this.scanTimer);
-        this.scanTimer = setTimeout(() => this.scan(), 350);
+        this.scanTimer = setTimeout(() => this.queueScan([changed]), 200);
       });
       this.context.subscriptions.push({ dispose: () => watcher.close() });
-    } catch { this.poller = setInterval(() => this.scan(), 5000); this.context.subscriptions.push({ dispose: () => clearInterval(this.poller) }); }
+    } catch { /* periodic known-file scan remains active */ }
   }
 
-  scan() {
-    let changes = 0;
-    for (const file of recentJsonl(path.join(this.config.dataDirectory, 'projects'))) changes += this.readIncrement(file);
-    this.store.save();
-    if (changes > 0 && !this.bootstrapping) this.refreshQuota();
-  }
-
-  readIncrement(file) {
-    let stat;
-    try { stat = fs.statSync(file); } catch { return 0; }
-    let offset = this.state.offsets[file] || 0;
-    if (stat.size < offset) offset = 0;
-    if (stat.size === offset) return 0;
-    const length = stat.size - offset;
-    const buffer = Buffer.alloc(length);
-    const fd = fs.openSync(file, 'r');
-    try { fs.readSync(fd, buffer, 0, length, offset); } finally { fs.closeSync(fd); }
-    this.state.offsets[file] = stat.size;
-    let processed = 0;
-    for (const line of buffer.toString('utf8').split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      let entry; try { entry = JSON.parse(line); } catch { continue; }
-      const turn = usageFromEntry(entry);
-      if (!turn || (turn.id && this.state.seen.includes(turn.id))) continue;
-      this.processTurn(turn, file);
-      processed++;
+  queueScan(files) {
+    for (const file of files || []) this.pendingFiles.add(file);
+    if (!this.scanPromise) {
+      this.scanPromise = this.drainScans().finally(() => { this.scanPromise = null; });
     }
-    return processed;
+    return this.scanPromise;
+  }
+
+  async drainScans() {
+    let totalChanges = 0, offsetsChanged = false;
+    while (this.pendingFiles.size) {
+      const files = [...this.pendingFiles];
+      this.pendingFiles.clear();
+      for (const file of files) {
+        const result = await this.readIncrement(file);
+        totalChanges += result.processed;
+        offsetsChanged ||= result.offsetChanged;
+      }
+    }
+    if (offsetsChanged) this.store.scheduleSave();
+    if (totalChanges > 0 && !this.bootstrapping) this.refreshQuota();
+    return totalChanges;
+  }
+
+  async readIncrement(file) {
+    const previousOffset = this.state.offsets[file] || 0;
+    const result = await readJsonlIncrement(file, previousOffset, entry => this.processEntry(entry, file));
+    if (result.missing) this.activeFiles.delete(file);
+    else this.state.offsets[file] = result.offset;
+    return { processed: result.processed, offsetChanged: result.offset !== previousOffset };
+  }
+
+  processEntry(entry, file) {
+    const turn = usageFromEntry(entry);
+    if (!turn || (turn.id && this.seenIds.has(turn.id))) return 0;
+    this.processTurn(turn, file);
+    if (turn.id) {
+      this.seenIds.add(turn.id);
+      if (this.seenIds.size > 1200) this.seenIds = new Set(this.state.seen);
+    }
+    return 1;
   }
 
   processTurn(turn, file) {
@@ -113,12 +165,14 @@ class DrainGuard {
     this.store.addTurn(turn);
     const current = this.state.slices.at(-1);
     this.store.addSlice(mergeSlice(current, turn, this.config.sliceMinutes));
-    analysis.forecast = bootstrapForecast(this.state.slices.slice(-12).map(s => s.fresh));
     this.alertState = transitionAlertState(this.alertState, analysis.risk, turn.timestamp);
     analysis.displayRisk = this.alertState.level;
     this.lastAnalysis = analysis;
-    this.render(turn, analysis);
-    if (!this.bootstrapping && analysis.alerts.length && this.alertState.shouldNotify && Date.now() >= this.mutedUntil) this.alert(turn, analysis);
+    if (!this.bootstrapping) {
+      analysis.forecast = bootstrapForecast(this.state.slices.slice(-12).map(s => s.fresh));
+      this.render(turn, analysis);
+      if (analysis.alerts.length && this.alertState.shouldNotify && Date.now() >= this.mutedUntil) this.alert(turn, analysis);
+    }
   }
 
   async refreshQuota() {
@@ -132,7 +186,7 @@ class DrainGuard {
       current.delta5h = delta;
       this.state.quotaSnapshots.push(current);
       this.state.quotaSnapshots = this.state.quotaSnapshots.slice(-288);
-      this.store.save();
+      this.store.scheduleSave();
       const turn = this.state.turns.at(-1);
       if (turn && delta !== null) {
         turn.quota5h = current.utilization5h;
@@ -153,24 +207,38 @@ class DrainGuard {
 
   render(turn, analysis) {
     if (!turn) {
-      this.status.text = '$(pulse) Claude —';
+      this.status.text = '5h —';
       this.status.tooltip = `Claude Drain Guard\nWaiting for Claude Code activity.`;
       this.status.backgroundColor = undefined;
+      this.alertStatus.text = '$(circle-filled)';
+      this.alertStatus.color = new vscode.ThemeColor('charts.blue');
+      this.alertStatus.tooltip = this.status.tooltip;
+      this.alertStatus.show();
       return;
     }
     const risk = analysis.displayRisk || analysis.risk;
     const quota = this.state.quotaSnapshots.at(-1);
-    const delta = quota?.delta5h;
     const quotaPart = quota ? `5h ${(quota.utilization5h * 100).toFixed(0)}%` : '5h —';
-    this.status.text = risk === 'critical'
-      ? `$(error) ${delta !== null && delta !== undefined ? `5h +${(delta * 100).toFixed(1)}% / 5m` : `cache ${turn.cacheHit.toFixed(0)}%`}`
-      : risk === 'warning'
-        ? `$(warning) cache ${turn.cacheHit.toFixed(0)}% · ${compact(this.state.slices.at(-1)?.fresh || 0)} / 5m`
-        : `$(pulse) ${quotaPart} · cache ${turn.cacheHit.toFixed(0)}%`;
-    this.status.backgroundColor = risk === 'critical' ? new vscode.ThemeColor('statusBarItem.errorBackground') : risk === 'warning' ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+    this.status.text = `${quotaPart} · cache ${turn.cacheHit.toFixed(0)}%`;
+    this.status.backgroundColor = undefined;
     this.status.color = undefined;
     const tooltip = this.tooltip(turn, analysis);
     this.status.tooltip = tooltip;
+    this.alertStatus.tooltip = tooltip;
+    this.alertStatus.backgroundColor = undefined;
+    if (risk === 'critical') {
+      this.alertStatus.text = '$(circle-filled) Alert';
+      this.alertStatus.color = new vscode.ThemeColor('charts.red');
+      this.alertStatus.show();
+    } else if (risk === 'warning') {
+      this.alertStatus.text = '$(circle-filled)';
+      this.alertStatus.color = new vscode.ThemeColor('charts.yellow');
+      this.alertStatus.show();
+    } else {
+      this.alertStatus.text = '$(circle-filled)';
+      this.alertStatus.color = new vscode.ThemeColor('charts.blue');
+      this.alertStatus.show();
+    }
   }
 
   tooltip(turn, analysis) {
@@ -226,26 +294,36 @@ class DrainGuard {
       detail: `${t.model} · risk ${Math.round(t.riskScore || 0)}/100${t.alerts?.length ? ` · ${t.alerts.map(a => a.code).join(', ')}` : ''}`,
       turn: t
     }));
-    const actions = [{ label: '$(file-text) Generate incident report', description: 'Save evidence as Markdown', report: true }, ...items];
+    const actions = [
+      { label: `$(clock) Refresh every ${this.config.refreshIntervalSeconds}s`, description: 'Set interval from 1 to 60 seconds', refresh: true },
+      { label: '$(file-text) Generate incident report', description: 'Save evidence as Markdown', report: true },
+      ...items
+    ];
     vscode.window.showQuickPick(actions, { title: 'Claude Drain Guard', placeHolder: 'Recent activity · five-minute slices retained for 24 hours', matchOnDescription: true, matchOnDetail: true }).then(selected => {
+      if (selected?.refresh) this.setRefreshInterval();
       if (selected?.report) this.openReport();
     });
   }
-}
 
-function recentJsonl(root) {
-  if (!fs.existsSync(root)) return [];
-  const result = [], stack = [root], cutoff = Date.now() - 48 * 60 * 60_000;
-  while (stack.length) {
-    const dir = stack.pop();
-    let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) stack.push(full);
-      else if (entry.name.endsWith('.jsonl')) { try { if (fs.statSync(full).mtimeMs >= cutoff) result.push(full); } catch {} }
-    }
+  async setRefreshInterval() {
+    const value = await vscode.window.showInputBox({
+      title: 'Claude Drain Guard refresh interval',
+      prompt: 'Enter a whole number from 1 to 60 seconds',
+      value: String(this.config.refreshIntervalSeconds),
+      validateInput: input => {
+        const seconds = Number(input);
+        return Number.isInteger(seconds) && seconds >= 1 && seconds <= 60 ? undefined : 'Use a whole number from 1 to 60.';
+      }
+    });
+    if (value === undefined) return;
+    const seconds = Number(value);
+    await vscode.workspace.getConfiguration('claudeDrainGuard').update('refreshIntervalSeconds', seconds, vscode.ConfigurationTarget.Global);
+    this.config.refreshIntervalSeconds = seconds;
+    clearInterval(this.refreshTimer);
+    this.refreshTimer = setInterval(() => this.queueScan(this.activeFiles), seconds * 1000);
+    await this.queueScan(this.activeFiles);
+    vscode.window.showInformationMessage(`Claude Drain Guard refreshes every ${seconds}s.`);
   }
-  return result;
 }
 
 function projectFromPath(file, projectsRoot) {
@@ -264,5 +342,5 @@ function activate(context) {
   guard.start();
 }
 
-function deactivate() {}
-module.exports = { activate, deactivate, recentJsonl };
+function deactivate() { return guard?.store.save(); }
+module.exports = { activate, deactivate };

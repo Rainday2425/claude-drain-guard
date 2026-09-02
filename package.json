@@ -2,7 +2,7 @@
   "name": "claude-drain-guard",
   "displayName": "Claude Drain Guard",
   "description": "Real-time, five-minute Claude Code drain and prompt-cache anomaly alerts.",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "publisher": "Givemepaw233",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -77,6 +77,13 @@
           "maximum": 60,
           "description": "Aggregation slice duration."
         },
+        "claudeDrainGuard.refreshIntervalSeconds": {
+          "type": "integer",
+          "default": 15,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Background refresh interval in seconds. File changes are also detected immediately."
+        },
         "claudeDrainGuard.cacheMissPercent": {
           "type": "number",
           "default": 60,
@@ -137,7 +144,7 @@
             "left",
             "right"
           ],
-          "default": "left"
+          "default": "right"
         }
       }
     }

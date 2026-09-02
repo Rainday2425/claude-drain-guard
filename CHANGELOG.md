@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0
+
+- Replaced repeated recursive scans with direct event-driven reads of changed JSONL files.
+- Added asynchronous 256 KB streaming reads with safe incomplete-line offsets.
+- Added an in-memory ID index and coalesced asynchronous atomic state writes.
+- Added lightweight known-file refreshes from 1–60 seconds (15 seconds by default).
+- Reduced full session discovery to one asynchronous reconciliation per minute.
+- Kept five-hour usage and cache hit persistently visible in the compact right-side item.
+
+## 0.6.2
+
+- Reduced the persistent right-side status item to five-hour usage only.
+- Added a separate blue dot for normal activity, yellow for elevated activity, and red `Alert` for critical drain.
+- Kept cache and five-minute slice details in the hover and activity picker.
+
 ## 0.6.1
 
 - Restyled the status item after Claude Code's compact, metric-first status-line pattern.

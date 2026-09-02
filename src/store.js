@@ -4,18 +4,33 @@ const fs = require('fs');
 const path = require('path');
 
 class Store {
-  constructor(file) { this.file = file; this.state = { turns: [], slices: [], offsets: {}, seen: [], groups: {}, quotaSnapshots: [] }; }
+  constructor(file) {
+    this.file = file;
+    this.state = { turns: [], slices: [], offsets: {}, seen: [], groups: {}, quotaSnapshots: [] };
+    this.saveTimer = null;
+    this.writeChain = Promise.resolve();
+  }
   load() {
     try { this.state = { ...this.state, ...JSON.parse(fs.readFileSync(this.file, 'utf8')) }; } catch { /* first run */ }
     this.state.groups ||= {};
     this.state.quotaSnapshots ||= [];
     return this.state;
   }
+  scheduleSave(delay = 750) {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => { this.save().catch(() => {}); }, delay);
+  }
   save() {
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    const temp = `${this.file}.tmp`;
-    fs.writeFileSync(temp, JSON.stringify(this.state));
-    fs.renameSync(temp, this.file);
+    clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    const snapshot = JSON.stringify(this.state);
+    this.writeChain = this.writeChain.catch(() => {}).then(async () => {
+      await fs.promises.mkdir(path.dirname(this.file), { recursive: true });
+      const temp = `${this.file}.tmp`;
+      await fs.promises.writeFile(temp, snapshot);
+      await fs.promises.rename(temp, this.file);
+    });
+    return this.writeChain;
   }
   addTurn(turn) {
     this.state.turns.push(turn);

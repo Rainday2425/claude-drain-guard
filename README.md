@@ -6,11 +6,13 @@ A zero-dependency VS Code extension that watches Claude Code locally, aggregates
 
 ## Status bar
 
-One progressive status item keeps healthy sessions quiet and makes danger obvious:
+Five-hour usage and cache hit stay visible in a small item on the right. A separate state indicator sits beside it:
 
-- Normal: `5h 31% · cache 97%`
-- Elevated: `cache 54% · 120k / 5m`
-- Critical: `5h +5.1% / 5m`
+- Normal: `5h 31% · cache 97%` followed by a blue dot
+- Elevated: the same metrics followed by a yellow dot
+- Critical: the same metrics followed by a red dot and `Alert`
+
+Click the item and select **Refresh every Ns** to set a 1–60 second background refresh interval. The default is 15 seconds; file changes still trigger an immediate incremental read.
 
 ## Signals
 
@@ -24,10 +26,18 @@ One progressive status item keeps healthy sessions quiet and makes danger obviou
 - Deterministic bootstrap 30-minute burn forecast with p50/p90 bounds
 - Hysteresis and notification cooldown to suppress alert flapping
 - Compact status bar: `5m fresh tokens · cache hit · risk score`
-- Claude-style single-line status item with one Codicon and native VS Code warning states
+- Compact right-side usage item plus a tiny blue/yellow/red state indicator
 - Compact native hover for the current slice; detailed evidence stays in VS Code Quick Pick
 - Acknowledgement-required critical alert after the first anomalous turn
 - Automatic local Markdown incident report with recent turns and five-minute slices
+
+## Performance
+
+- Event-driven reads target only the JSONL file that changed
+- Configurable 1–60 second checks touch only known active files
+- Full session discovery is asynchronous and runs once per minute
+- Appended data is streamed in 256 KB chunks; incomplete JSONL tails are preserved
+- State writes are asynchronous, atomic, and coalesced only after new data
 
 No prompts, source code, credentials, or telemetry are collected. Local monitoring is the default. In v0.4, users may explicitly opt in to an authoritative quota adapter: it reads the existing Claude OAuth token in memory, makes at most one minimal 1-token Haiku request per five minutes after local Claude activity, reads only rate-limit response headers, never persists the token, and falls back safely to local detection on failure. This optional request consumes a tiny amount of quota.
 

@@ -1,0 +1,148 @@
+{
+  "name": "claude-drain-guard",
+  "displayName": "Claude Drain Guard",
+  "description": "Real-time, five-minute Claude Code drain and prompt-cache anomaly alerts.",
+  "version": "0.5.2",
+  "publisher": "Givemepaw233",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Rainday2425/claude-drain-guard.git"
+  },
+  "homepage": "https://github.com/Rainday2425/claude-drain-guard#readme",
+  "bugs": {
+    "url": "https://github.com/Rainday2425/claude-drain-guard/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cache",
+    "usage",
+    "monitor",
+    "alert"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./src/extension.js",
+  "files": [
+    "src/**",
+    "images/*.png",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "PRIVACY.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeDrainGuard.showDetails",
+        "title": "Claude Drain Guard: Show Details"
+      },
+      {
+        "command": "claudeDrainGuard.generateReport",
+        "title": "Claude Drain Guard: Generate Incident Report"
+      },
+      {
+        "command": "claudeDrainGuard.resetBaseline",
+        "title": "Claude Drain Guard: Reset Baseline"
+      },
+      {
+        "command": "claudeDrainGuard.mute",
+        "title": "Claude Drain Guard: Mute Alerts for 15 Minutes"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Drain Guard",
+      "properties": {
+        "claudeDrainGuard.dataDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Claude config directory. Empty uses CLAUDE_CONFIG_DIR or ~/.claude."
+        },
+        "claudeDrainGuard.sliceMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Aggregation slice duration."
+        },
+        "claudeDrainGuard.cacheMissPercent": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "maximum": 100
+        },
+        "claudeDrainGuard.cacheCliffPoints": {
+          "type": "number",
+          "default": 40,
+          "minimum": 5,
+          "maximum": 100
+        },
+        "claudeDrainGuard.largeFreshTokens": {
+          "type": "number",
+          "default": 100000,
+          "minimum": 1000
+        },
+        "claudeDrainGuard.robustZThreshold": {
+          "type": "number",
+          "default": 4.5,
+          "minimum": 2,
+          "maximum": 20
+        },
+        "claudeDrainGuard.notifications": {
+          "type": "boolean",
+          "default": true
+        },
+        "claudeDrainGuard.modalCriticalAlerts": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require acknowledgement for critical drain events."
+        },
+        "claudeDrainGuard.autoGenerateCriticalReport": {
+          "type": "boolean",
+          "default": true,
+          "description": "Generate a local Markdown evidence report for every critical incident."
+        },
+        "claudeDrainGuard.authoritativeQuota.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt in to a minimal Anthropic Messages request, at most once per five minutes, to read authoritative 5h/7d rate-limit headers. This consumes a tiny amount of quota."
+        },
+        "claudeDrainGuard.authoritativeQuota.credentialsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Claude credentials file. Empty uses the selected Claude data directory/.credentials.json."
+        },
+        "claudeDrainGuard.authoritativeQuota.sliceSpikePercent": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0.1,
+          "maximum": 100,
+          "description": "Critical alert when authoritative 5h utilization rises by this many percentage points between five-minute snapshots."
+        },
+        "claudeDrainGuard.statusBarAlignment": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ],
+          "default": "right"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

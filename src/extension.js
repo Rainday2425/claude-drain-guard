@@ -14,6 +14,7 @@ const { recentJsonl, readJsonlIncrement } = require('./scanner');
 const { detectProvider, formatStatus } = require('./display');
 const { buildDashboard } = require('./dashboard');
 const { installUsageTap } = require('./usageTap');
+const { estimateTurnCost, costSource } = require('./cost');
 
 let guard;
 
@@ -68,16 +69,19 @@ class DrainGuard {
       quotaEnabled: c.get('authoritativeQuota.enabled', true),
       quotaCredentials: c.get('authoritativeQuota.credentialsPath', ''),
       quotaSpikePercent: c.get('authoritativeQuota.sliceSpikePercent', 2) / 100,
+      costFallbackTtl: c.get('cost.fallbackCacheTtl', 'auto'),
       refreshIntervalSeconds: c.get('refreshIntervalSeconds', 15),
       alignment: c.get('statusBarAlignment', 'right')
     };
   }
 
   migrateDetectorState() {
-    if ((this.state.detectorVersion || 0) >= 3) return;
+    if ((this.state.detectorVersion || 0) >= 4) return;
     const groups = {};
     const turns = [...this.state.turns].sort((a, b) => a.timestamp - b.timestamp);
     for (const turn of turns) {
+      turn.costUsd = estimateTurnCost(turn, fallbackCostTtl(turn, this.provider, this.config.costFallbackTtl), this.provider);
+      turn.costSource = costSource(turn, this.provider);
       turn.contextBucket ||= `${Math.floor(turn.totalInput / 50_000) * 50}k`;
       turn.groupKey = `${turn.model}|${turn.project}|${turn.contextBucket}`;
       const group = groups[turn.groupKey] || { turns: [], online: {} };
@@ -93,7 +97,7 @@ class DrainGuard {
     }
     this.state.turns = turns.slice(-500);
     this.state.groups = groups;
-    this.state.detectorVersion = 3;
+    this.state.detectorVersion = 4;
     this.store.scheduleSave(0);
   }
 
@@ -197,6 +201,8 @@ class DrainGuard {
   }
 
   processTurn(turn, file) {
+    turn.costUsd = estimateTurnCost(turn, fallbackCostTtl(turn, this.provider, this.config.costFallbackTtl), this.provider);
+    turn.costSource = costSource(turn, this.provider);
     turn.project = projectFromPath(file, path.join(this.config.dataDirectory, 'projects'));
     turn.contextBucket = `${Math.floor(turn.totalInput / 50_000) * 50}k`;
     turn.cacheState = turn.cacheHit < this.config.cacheMissPercent ? 'miss' : 'warm';
@@ -455,6 +461,11 @@ class DrainGuard {
 function projectFromPath(file, projectsRoot) {
   const relative = path.relative(projectsRoot, file);
   return relative.split(path.sep)[0] || 'unknown';
+}
+
+function fallbackCostTtl(turn, provider, configured = 'auto') {
+  if (configured === '5m' || configured === '1h') return configured;
+  return '5m';
 }
 
 function formatReset(timestamp) {

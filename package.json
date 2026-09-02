@@ -2,7 +2,7 @@
   "name": "claude-drain-guard",
   "displayName": "Claude Drain Guard",
   "description": "Real-time, five-minute Claude Code drain and prompt-cache anomaly alerts.",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "publisher": "Givemepaw233",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -152,6 +152,12 @@
           "minimum": 0.1,
           "maximum": 100,
           "description": "Critical alert when authoritative 5h utilization rises by this many percentage points between five-minute snapshots."
+        },
+        "claudeDrainGuard.cost.fallbackCacheTtl": {
+          "type": "string",
+          "enum": ["auto", "5m", "1h"],
+          "default": "auto",
+          "description": "Cache-write TTL used only when Claude Code omits the 5m/1h breakdown. Auto follows ccusage's conservative standard 5m cache-write fallback; choose 1h only when you know the request used it."
         },
         "claudeDrainGuard.statusBarAlignment": {
           "type": "string",

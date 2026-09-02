@@ -4,7 +4,7 @@ const { bootstrapForecast, compact } = require('./detector');
 function generateReport(incident, turns, slices, config) {
   const forecast = bootstrapForecast(slices.slice(-12).map(s => s.fresh));
   const alertLines = (incident.alerts || []).map(a => `- **${a.code}**: ${a.text}`).join('\n') || '- No classified signal';
-  const turnRows = turns.slice(-12).map(t => `| ${new Date(t.timestamp).toISOString()} | ${Math.round(t.cacheHit)}% | ${t.input} | ${t.cacheRead} | ${t.cacheWrite} | ${t.output} | ${(t.alerts || []).map(a => a.code).join(', ') || '—'} |`).join('\n');
+  const turnRows = turns.slice(-12).map(t => `| ${new Date(t.timestamp).toISOString()} | ${Math.round(t.cacheHit)}% | ${t.input} | ${t.cacheRead} | ${t.cacheWrite} | ${t.output} | ${Number.isFinite(t.costUsd) ? `$${t.costUsd.toFixed(4)} (${t.costSource || 'estimated'})` : '—'} | ${(t.alerts || []).map(a => a.code).join(', ') || '—'} |`).join('\n');
   const sliceRows = slices.slice(-12).map(s => `| ${new Date(s.start).toISOString()} | ${s.calls} | ${Math.round(s.cacheHit)}% | ${s.fresh} | ${s.cacheWrite} | ${s.output} |`).join('\n');
   return `# Claude Drain Incident Report
 
@@ -20,6 +20,7 @@ Generated locally by Claude Drain Guard. It contains usage metadata only—not p
 - Fresh input: **${incident.fresh} tokens**
 - Cache read/write: **${incident.cacheRead} / ${incident.cacheWrite} tokens**
 - Output: **${incident.output} tokens**
+- API-equivalent cost: **${Number.isFinite(incident.costUsd) ? `$${incident.costUsd.toFixed(4)} (${incident.costSource || 'estimated'})` : 'unavailable'}**
 - Authoritative 5h usage: **${incident.quota5h === undefined ? 'not sampled' : `${(incident.quota5h * 100).toFixed(1)}%`}**
 - Five-minute 5h quota delta: **${incident.quotaDelta5h === undefined || incident.quotaDelta5h === null ? 'not available' : `+${(incident.quotaDelta5h * 100).toFixed(1)} percentage points`}**
 
@@ -35,8 +36,8 @@ ${forecast ? `Median fresh input: **${compact(forecast.p50)} tokens**; conservat
 
 ## Recent turns
 
-| Time (UTC) | Cache hit | Uncached input | Cache read | Cache write | Output | Signals |
-|---|---:|---:|---:|---:|---:|---|
+| Time (UTC) | Cache hit | Uncached input | Cache read | Cache write | Output | Cost | Signals |
+|---|---:|---:|---:|---:|---:|---:|---|
 ${turnRows}
 
 ## Five-minute slices
@@ -61,7 +62,7 @@ ${sliceRows}
 
 ## Interpretation caveat
 
-Measurements come from local Claude Code transcripts. Without an authoritative five-hour usage source, this report identifies drain risk and cache failure but does not claim an exact subscription-quota deduction.
+Measurements come from local Claude Code transcripts. Cost uses Claude Code's per-entry costUSD when available and otherwise an official-price token estimate. It is API-equivalent impact—not Claude Max billing and not a conversion to five-hour subscription quota.
 `;
 }
 

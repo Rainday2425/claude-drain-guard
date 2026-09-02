@@ -43,8 +43,11 @@ function pageHinkley(value, previous = {}, options = {}) {
 }
 
 function cusum(z, previous = 0, drift = 0.5, threshold = 5) {
-  const value = Math.max(0, previous + Math.max(0, z) - drift);
-  return { value, changed: value >= threshold };
+  const statistic = Math.max(0, previous + Math.max(0, z) - drift);
+  const changed = statistic >= threshold;
+  // As with Page-Hinkley, emit an event and start a new segment. Keeping an
+  // alarmed cumulative value made every later turn look anomalous.
+  return { value: changed ? 0 : statistic, statistic, changed };
 }
 
 function multivariateRisk(signals) {
@@ -83,19 +86,19 @@ function analyzeTurn(turn, previousTurn, history, config, online = {}) {
   const excessFresh = turn.totalInput * Math.max(0, cacheBaseline - turn.cacheHit) / 100;
   const signals = { freshZ, writeZ, outputZ, cacheDropZ, excessFresh, cacheDeficit: Math.max(0, (80 - turn.cacheHit) / 20), cacheCliff: cliffPoints / Math.max(1, config.cacheCliffPoints), pageHinkley: ph.changed, cusum: cs.changed };
   let score = multivariateRisk(signals); const alerts = [];
-  if (turn.cacheHit < config.cacheMissPercent && turn.totalInput >= 10_000) alerts.push({ severity: 'warning', code: 'CACHE_MISS', text: `Cache hit ${turn.cacheHit.toFixed(0)}%` });
-  if (cliffPoints >= config.cacheCliffPoints) alerts.push({ severity: 'critical', code: 'CACHE_CLIFF', text: `Cache fell ${Math.round(cliffPoints)} points` });
+  if (turn.totalInput >= 10_000 && cliffPoints >= config.cacheCliffPoints) alerts.push({ severity: 'critical', code: 'CACHE_CLIFF', text: `Cache ${previousTurn.cacheHit.toFixed(0)}%→${turn.cacheHit.toFixed(0)}% · ${compact(turn.fresh)} uncached` });
   const baselineCollapse = cacheHistory.length >= 6 && cacheBaseline - turn.cacheHit >= config.cacheCliffPoints && cacheDropZ >= config.robustZThreshold;
   const coldStartCollapse = cacheHistory.length < 6 && turn.cacheHit <= (config.absoluteCacheFloorPercent ?? 10);
   if (turn.totalInput >= 10_000 && (baselineCollapse || coldStartCollapse) && !alerts.some(alert => alert.code === 'CACHE_CLIFF')) {
-    alerts.push({ severity: 'critical', code: 'CACHE_COLLAPSE', text: `Cache ${turn.cacheHit.toFixed(0)}% · ${compact(excessFresh || turn.fresh)} excess fresh tokens` });
+    const uncached = baselineCollapse ? excessFresh : turn.fresh;
+    alerts.push({ severity: 'critical', code: 'CACHE_COLLAPSE', text: `Cache collapsed to ${turn.cacheHit.toFixed(0)}% · ${compact(uncached)} uncached` });
   }
-  if (turn.fresh >= config.largeFreshTokens) alerts.push({ severity: 'critical', code: 'FRESH_SPIKE', text: `${compact(turn.fresh)} fresh tokens` });
-  if (freshZ >= config.robustZThreshold) alerts.push({ severity: 'critical', code: 'ROBUST_SPIKE', text: `Fresh-token robust z=${freshZ.toFixed(1)}` });
-  if (ph.changed) alerts.push({ severity: 'critical', code: 'CHANGE_POINT', text: `Page-Hinkley=${ph.statistic.toFixed(2)}` });
-  if (cs.changed) alerts.push({ severity: 'warning', code: 'CUSUM', text: `CUSUM=${cs.value.toFixed(1)}` });
-  if (recent.length >= 6 && score >= 75 && !alerts.some(a => a.severity === 'critical')) alerts.push({ severity: 'critical', code: 'MULTIVARIATE', text: `Combined risk ${score.toFixed(0)}/100` });
-  else if (recent.length >= 6 && score >= 50 && !alerts.length) alerts.push({ severity: 'warning', code: 'MULTIVARIATE', text: `Combined risk ${score.toFixed(0)}/100` });
+  if (turn.cacheHit < config.cacheMissPercent && turn.totalInput >= 10_000 && !alerts.some(alert => alert.code.startsWith('CACHE_'))) alerts.push({ severity: 'warning', code: 'CACHE_MISS', text: `Cache hit ${turn.cacheHit.toFixed(0)}%` });
+  if (turn.fresh >= config.largeFreshTokens) alerts.push({ severity: 'critical', code: 'FRESH_SPIKE', text: `${compact(turn.fresh)} fresh input` });
+  else if (freshZ >= config.robustZThreshold) alerts.push({ severity: 'warning', code: 'ROBUST_SPIKE', text: `Fresh input unusually high for this workload` });
+  else if (ph.changed) alerts.push({ severity: 'warning', code: 'CHANGE_POINT', text: `Fresh-input pattern shifted` });
+  else if (cs.changed) alerts.push({ severity: 'warning', code: 'CUSUM', text: `Fresh-input drift detected` });
+  if (recent.length >= 6 && score >= 50 && !alerts.length) alerts.push({ severity: 'warning', code: 'MULTIVARIATE', text: `Combined anomaly ${score.toFixed(0)}/100` });
   const baseline = median(freshHistory), recentEwma = ewma([...freshHistory.slice(-5), turn.fresh]);
   if (!alerts.length && freshHistory.length >= 6 && baseline > 0 && recentEwma >= baseline * 3) alerts.push({ severity: 'warning', code: 'BURN_ACCELERATION', text: 'Recent burn is >3× baseline' });
   if (alerts.some(alert => alert.severity === 'critical')) score = Math.max(90, score);

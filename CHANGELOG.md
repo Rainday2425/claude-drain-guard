@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.3
+
+- Grouped consecutive anomalous turns into incidents so one drain episode produces one dashboard row.
+- Added selectable 5-minute, 30-minute, and 1-hour chart buckets on a true 24-hour wall-clock timeline.
+- Switched the chart to a log scale and marked warning/critical buckets without flattening normal activity.
+- Made Page-Hinkley, CUSUM, robust, and multivariate-only changes elevated rather than critical; absolute cache collapse or high fresh input is still critical.
+- Reset CUSUM after a detected change point to stop repeated alerts from a latched statistic.
+- Added `costUSD`-first API-equivalent cost tracking with official per-model fallback pricing and separate 5m/1h cache-write tokens.
+- Added cost impact to the dashboard, grouped incidents, and generated reports while explicitly separating it from Max billing and 5h quota.
+
 ## 0.8.2
 
 - Fixed a recovered 96% cache-hit turn remaining visually critical because of alert-state stickiness.

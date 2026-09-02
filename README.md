@@ -1,14 +1,12 @@
 # Claude Drain Guard
 
-![Claude-style compact status line](images/states.png)
-
 A zero-dependency VS Code extension that watches Claude Code locally, aggregates five-minute slices, and tells you to stop after the first anomalous prompt—before the next few prompts drain the session.
 
 ## Install or update
 
-Install **Claude Drain Guard 0.8.2** from the Visual Studio Marketplace, or open **Extensions: Install from VSIX...** in VS Code and select the `0.8.2` VSIX package.
+Install **Claude Drain Guard 0.8.3** from the Visual Studio Marketplace, or open **Extensions: Install from VSIX...** in VS Code and select the `0.8.3` VSIX package.
 
-Marketplace releases are immutable: an uploaded package cannot be replaced. Use `0.8.2` for the finalized dashboard, corrected cache-collapse state, and live OAuth usage fallback.
+Marketplace releases are immutable: an uploaded package cannot be replaced. Use `0.8.3` for grouped incidents, selectable chart buckets, corrected statistical severity, and API-equivalent cost estimates.
 
 ## Status bar
 
@@ -38,14 +36,16 @@ Quota display adapts to the available data: Claude.ai 5h/7d, 5h-only, stale quot
 - Compact native hover for the current slice; detailed evidence stays in VS Code Quick Pick
 - Acknowledgement-required critical alert after the first anomalous turn
 - Automatic local Markdown incident report with recent turns and five-minute slices
+- Cost auto mode: prefer Claude Code's per-entry `costUSD`, then estimate from official model pricing when it is absent
+- Separate 5-minute and 1-hour cache-write pricing when Claude Code provides the TTL breakdown
 
 ## Dashboard
 
-Click the status item or run **Claude Drain Guard: Open Dashboard**. The native-themed dashboard shows 5h/7d usage, cache hit, five-minute fresh input, risk score, a 24-hour slice chart, and recent anomalies. It also provides one-click live-usage enablement, refresh interval controls, and incident reports. Prompt and response content is never shown.
+Click the status item or run **Claude Drain Guard: Open Dashboard**. The native-themed dashboard shows 5h/7d usage, cache hit, five-minute fresh input, risk score, and API-equivalent cost. The 24-hour chart switches between 5-minute, 30-minute, and 1-hour buckets and uses a log scale so ordinary activity remains visible beside a large spike. Consecutive anomalous turns are grouped into one incident with aggregate fresh tokens and cost instead of filling the table with repeated rows. Prompt and response content is never shown.
+
+Cost follows the mature [ccusage auto strategy](https://github.com/ccusage/ccusage/blob/main/docs/guide/cost-modes.md): use Claude Code's reported per-entry estimate when available, otherwise multiply input, output, cache-read, 5-minute cache-write, and 1-hour cache-write tokens by the matching [official model rates](https://platform.claude.com/docs/en/about-claude/pricing). It is an API-equivalent impact estimate, not a Claude Max invoice and not a conversion to the 5-hour quota. If old records omit the TTL breakdown, the default fallback is the standard 5-minute cache-write rate and can be changed with `claudeDrainGuard.cost.fallbackCacheTtl`. Cloud-provider and fast-mode fallbacks are deliberately left unavailable unless Claude Code reports their cost, avoiding a misleading first-party estimate.
 
 If `5h:—` remains visible, click **Connect live usage** in the dashboard. On setups where the official VS Code extension keeps its login isolated, this opens the bundled official Claude Code CLI for a one-time OAuth login; Claude Drain Guard never receives or stores the token itself.
-
-![Claude Drain Guard dashboard](images/dashboard.png)
 
 ## Performance
 
@@ -56,8 +56,6 @@ If `5h:—` remains visible, click **Connect live usage** in the dashboard. On s
 - State writes are asynchronous, atomic, and coalesced only after new data
 
 No prompts, source code, credentials, or telemetry are collected. Local anomaly monitoring remains independent of the network. Live 5h/7d usage is enabled by default: when a readable Claude OAuth token is available, the adapter makes a read-only `GET /api/oauth/usage` request at most once per five minutes. When Claude Code keeps its token private, the extension can passively observe the official VS Code extension's response for that exact Anthropic endpoint. No model prompt is sent, and the token is never logged or persisted. The feature can be disabled with `claudeDrainGuard.authoritativeQuota.enabled`.
-
-![Native recent-activity picker with evidence](images/incident.png)
 
 ## Development
 

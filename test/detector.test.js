@@ -44,6 +44,13 @@ test('96% cache with normal token activity is healthy', () => {
   assert.equal(result.alerts.length, 0);
 });
 
+test('a relative statistical shift without high absolute drain is not critical', () => {
+  const history = [950, 1000, 1050, 980, 1020, 990, 1010].map(fresh => ({ cacheHit: 98, fresh, cacheWrite: 100, output: 200 }));
+  const result = analyzeTurn({ cacheHit: 98, totalInput: 650000, fresh: 13000, cacheWrite: 100, output: 200 }, history.at(-1), history, config);
+  assert.notEqual(result.risk, 'critical');
+  assert.equal(result.alerts.some(alert => alert.severity === 'critical'), false);
+});
+
 test('aggregates five-minute slices', () => {
   const a = mergeSlice(null, { timestamp: 1000, input: 10, output: 2, cacheRead: 80, cacheWrite: 10, fresh: 20 }, 5);
   const b = mergeSlice(a, { timestamp: 2000, input: 10, output: 2, cacheRead: 80, cacheWrite: 10, fresh: 20 }, 5);
@@ -65,9 +72,13 @@ test('Page-Hinkley and CUSUM detect sustained distribution shift', () => {
     ph = result.state; changed ||= result.changed;
   }
   assert.equal(changed, true);
-  let sum = 0;
-  for (const z of [1.5, 1.5, 1.5, 1.5, 1.5]) sum = cusum(z, sum).value;
-  assert.ok(sum >= 5);
+  let sum = 0, sumChanged = false;
+  for (const z of [1.5, 1.5, 1.5, 1.5, 1.5]) {
+    const result = cusum(z, sum);
+    sum = result.value; sumChanged ||= result.changed;
+  }
+  assert.equal(sumChanged, true);
+  assert.equal(sum, 0);
 });
 
 test('bootstrap forecast is deterministic and hysteresis needs two healthy turns', () => {

@@ -3,9 +3,13 @@
 ## 0.8.0
 
 - Added adaptive Claude.ai 5h/7d, 5h-only, stale, local, API-key, and Bedrock status formats.
+- Enabled live 5h/7d sampling by default, matching the reference extension, with a local-only opt-out.
 - Kept cache hit visible in every active status format.
 - Kept quota percentages informational: only drain-anomaly signals control the blue/yellow/red indicator.
 - Avoided inaccurate dollar estimates when the active model's pricing is unknown.
+- Added a native-themed dashboard with 24-hour five-minute slices and recent anomalies.
+- Fixed cache-state self-segmentation so a warm-to-cold collapse is compared with the user's real baseline.
+- Added robust cache-drop scoring, excess-fresh-token evidence, and a 90-point floor for critical signals.
 
 ## 0.7.1
 

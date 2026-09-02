@@ -33,6 +33,12 @@ Quota display adapts to the available data: Claude.ai 5h/7d, 5h-only, stale quot
 - Acknowledgement-required critical alert after the first anomalous turn
 - Automatic local Markdown incident report with recent turns and five-minute slices
 
+## Dashboard
+
+Click the status item or run **Claude Drain Guard: Open Dashboard**. The native-themed dashboard shows 5h/7d usage, cache hit, five-minute fresh input, risk score, a 24-hour slice chart, and recent anomalies. It also provides one-click live-usage enablement, refresh interval controls, and incident reports. Prompt and response content is never shown.
+
+![Claude Drain Guard dashboard](images/dashboard.png)
+
 ## Performance
 
 - Event-driven reads target only the JSONL file that changed
@@ -41,7 +47,7 @@ Quota display adapts to the available data: Claude.ai 5h/7d, 5h-only, stale quot
 - Appended data is streamed in 256 KB chunks; incomplete JSONL tails are preserved
 - State writes are asynchronous, atomic, and coalesced only after new data
 
-No prompts, source code, credentials, or telemetry are collected. Local monitoring is the default. In v0.4, users may explicitly opt in to an authoritative quota adapter: it reads the existing Claude OAuth token in memory, makes at most one minimal 1-token Haiku request per five minutes after local Claude activity, reads only rate-limit response headers, never persists the token, and falls back safely to local detection on failure. This optional request consumes a tiny amount of quota.
+No prompts, source code, credentials, or telemetry are collected. Local anomaly monitoring remains independent of the network. Live 5h/7d usage is enabled by default: the adapter reads the existing Claude OAuth token in memory, makes at most one minimal 1-token Haiku request per five minutes, reads only rate-limit response headers, never persists the token, and falls back safely to local detection on failure. This request consumes a tiny amount of quota and can be disabled with `claudeDrainGuard.authoritativeQuota.enabled`.
 
 ![Native recent-activity picker with evidence](images/incident.png)
 
@@ -51,6 +57,7 @@ Open this folder in VS Code and press `F5`. Run `node --test test/*.test.js` for
 
 ## Commands
 
+- `Claude Drain Guard: Open Dashboard`
 - `Claude Drain Guard: Show Details`
 - `Claude Drain Guard: Generate Incident Report`
 - `Claude Drain Guard: Mute Alerts for 15 Minutes`

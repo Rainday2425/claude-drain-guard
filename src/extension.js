@@ -4,6 +4,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { usageFromEntry, mergeSlice } = require('./metrics');
 const { analyzeTurn, bootstrapForecast, transitionAlertState, compact } = require('./detector');
 const { Store } = require('./store');
@@ -11,6 +12,7 @@ const { generateReport } = require('./report');
 const { fetchQuota, quotaDelta, defaultCredentials } = require('./quota');
 const { recentJsonl, readJsonlIncrement } = require('./scanner');
 const { detectProvider, formatStatus } = require('./display');
+const { buildDashboard } = require('./dashboard');
 
 let guard;
 
@@ -21,6 +23,7 @@ class DrainGuard {
     this.provider = detectProvider(this.config.dataDirectory, this.config.quotaCredentials);
     this.store = new Store(path.join(context.globalStorageUri.fsPath, 'metrics.json'));
     this.state = this.store.load();
+    this.migrateDetectorState();
     this.bootstrapping = true;
     this.mutedUntil = 0;
     this.alertState = { level: 'healthy', healthyStreak: 0 };
@@ -29,16 +32,18 @@ class DrainGuard {
     this.pendingFiles = new Set();
     this.seenIds = new Set(this.state.seen);
     this.scanPromise = null;
+    const restored = this.state.turns.at(-1);
+    if (restored) this.lastAnalysis = { risk: restored.risk, displayRisk: restored.risk, alerts: restored.alerts || [], score: restored.riskScore || 0, signals: restored.signals || {} };
     const alignment = this.config.alignment === 'left' ? vscode.StatusBarAlignment.Left : vscode.StatusBarAlignment.Right;
     this.status = vscode.window.createStatusBarItem(alignment, 100);
     this.status.name = 'Claude Drain Guard';
-    this.status.command = 'claudeDrainGuard.showDetails';
+    this.status.command = 'claudeDrainGuard.openDashboard';
     this.status.text = '5h — · cache —';
     this.status.tooltip = 'Claude Drain Guard\nWaiting for Claude Code activity.';
     this.status.show();
     this.alertStatus = vscode.window.createStatusBarItem(alignment, 99);
     this.alertStatus.name = 'Claude Drain Guard alert';
-    this.alertStatus.command = 'claudeDrainGuard.showDetails';
+    this.alertStatus.command = 'claudeDrainGuard.openDashboard';
     this.alertStatus.text = '$(circle-filled)';
     this.alertStatus.color = new vscode.ThemeColor('charts.blue');
     this.alertStatus.tooltip = this.status.tooltip;
@@ -52,14 +57,39 @@ class DrainGuard {
       dataDirectory: c.get('dataDirectory') || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'),
       sliceMinutes: c.get('sliceMinutes', 5), cacheMissPercent: c.get('cacheMissPercent', 60),
       cacheCliffPoints: c.get('cacheCliffPoints', 40), largeFreshTokens: c.get('largeFreshTokens', 100000),
+      absoluteCacheFloorPercent: c.get('absoluteCacheFloorPercent', 10),
       robustZThreshold: c.get('robustZThreshold', 4.5), notifications: c.get('notifications', true),
       modalCriticalAlerts: c.get('modalCriticalAlerts', true), autoGenerateCriticalReport: c.get('autoGenerateCriticalReport', true),
-      quotaEnabled: c.get('authoritativeQuota.enabled', false),
+      quotaEnabled: c.get('authoritativeQuota.enabled', true),
       quotaCredentials: c.get('authoritativeQuota.credentialsPath', ''),
       quotaSpikePercent: c.get('authoritativeQuota.sliceSpikePercent', 2) / 100,
       refreshIntervalSeconds: c.get('refreshIntervalSeconds', 15),
       alignment: c.get('statusBarAlignment', 'right')
     };
+  }
+
+  migrateDetectorState() {
+    if ((this.state.detectorVersion || 0) >= 2) return;
+    const groups = {};
+    const turns = [...this.state.turns].sort((a, b) => a.timestamp - b.timestamp);
+    for (const turn of turns) {
+      turn.contextBucket ||= `${Math.floor(turn.totalInput / 50_000) * 50}k`;
+      turn.groupKey = `${turn.model}|${turn.project}|${turn.contextBucket}`;
+      const group = groups[turn.groupKey] || { turns: [], online: {} };
+      const analysis = analyzeTurn(turn, group.turns.at(-1), group.turns, this.config, group.online);
+      turn.risk = analysis.risk;
+      turn.alerts = analysis.alerts;
+      turn.riskScore = analysis.score;
+      turn.signals = analysis.signals;
+      group.online = analysis.online;
+      group.turns.push(turn);
+      group.turns = group.turns.slice(-144);
+      groups[turn.groupKey] = group;
+    }
+    this.state.turns = turns.slice(-500);
+    this.state.groups = groups;
+    this.state.detectorVersion = 2;
+    this.store.scheduleSave(0);
   }
 
   start() {
@@ -72,6 +102,7 @@ class DrainGuard {
         this.lastAnalysis.forecast = bootstrapForecast(this.state.slices.slice(-12).map(slice => slice.fresh));
         this.render(turn, this.lastAnalysis);
       } else this.render(null, { risk: 'idle', alerts: [] });
+      if (this.config.quotaEnabled) this.refreshQuota();
     });
   }
 
@@ -158,8 +189,9 @@ class DrainGuard {
     turn.project = projectFromPath(file, path.join(this.config.dataDirectory, 'projects'));
     turn.contextBucket = `${Math.floor(turn.totalInput / 50_000) * 50}k`;
     turn.cacheState = turn.cacheHit < this.config.cacheMissPercent ? 'miss' : 'warm';
-    turn.groupKey = `${turn.model}|${turn.project}|${turn.contextBucket}|${turn.cacheState}`;
-    const group = this.state.groups[turn.groupKey] || { turns: [], online: {} };
+    turn.groupKey = `${turn.model}|${turn.project}|${turn.contextBucket}`;
+    const legacyTurns = this.state.turns.filter(item => item.model === turn.model && item.project === turn.project && item.contextBucket === turn.contextBucket).slice(-144);
+    const group = this.state.groups[turn.groupKey] || { turns: legacyTurns, online: {} };
     const previous = group.turns.at(-1);
     const analysis = analyzeTurn(turn, previous, group.turns, this.config, group.online);
     turn.risk = analysis.risk;
@@ -183,13 +215,14 @@ class DrainGuard {
     }
   }
 
-  async refreshQuota() {
+  async refreshQuota(force = false) {
     if (!this.config.quotaEnabled || this.quotaPending) return;
     const previous = this.state.quotaSnapshots.at(-1);
-    if (previous && Date.now() - previous.timestamp < 5 * 60_000) return;
+    if (!force && previous && Date.now() - previous.timestamp < 5 * 60_000) return;
     this.quotaPending = true;
     try {
       const current = await fetchQuota({ credentialsPath: defaultCredentials(this.config.dataDirectory, this.config.quotaCredentials) });
+      this.quotaError = null;
       const delta = quotaDelta(previous, current);
       current.delta5h = delta;
       this.state.quotaSnapshots.push(current);
@@ -210,7 +243,7 @@ class DrainGuard {
       }
     } catch (error) {
       this.quotaError = error instanceof Error ? error.message : String(error);
-    } finally { this.quotaPending = false; }
+    } finally { this.quotaPending = false; this.updateDashboard(); }
   }
 
   render(turn, analysis) {
@@ -247,6 +280,7 @@ class DrainGuard {
       this.alertStatus.color = new vscode.ThemeColor('charts.blue');
       this.alertStatus.show();
     }
+    this.updateDashboard();
   }
 
   tooltip(turn, analysis) {
@@ -335,6 +369,41 @@ class DrainGuard {
     this.refreshTimer = setInterval(() => this.queueScan(this.activeFiles), seconds * 1000);
     await this.queueScan(this.activeFiles);
     vscode.window.showInformationMessage(`Claude Drain Guard refreshes every ${seconds}s.`);
+    this.updateDashboard();
+  }
+
+  openDashboard() {
+    if (this.dashboardPanel) { this.dashboardPanel.reveal(vscode.ViewColumn.Beside); this.updateDashboard(); return; }
+    this.dashboardPanel = vscode.window.createWebviewPanel('claudeDrainGuard.dashboard', 'Claude Drain Guard', vscode.ViewColumn.Beside, { enableScripts: true, retainContextWhenHidden: false });
+    this.dashboardPanel.onDidDispose(() => { this.dashboardPanel = null; });
+    this.dashboardPanel.webview.onDidReceiveMessage(async message => {
+      if (message.action === 'interval') await this.setRefreshInterval();
+      if (message.action === 'report') await this.openReport();
+      if (message.action === 'refresh') {
+        await this.queueScan(this.activeFiles);
+        if (this.config.quotaEnabled) await this.refreshQuota(true);
+        this.updateDashboard();
+      }
+      if (message.action === 'enableQuota') {
+        await vscode.workspace.getConfiguration('claudeDrainGuard').update('authoritativeQuota.enabled', true, vscode.ConfigurationTarget.Global);
+        this.config.quotaEnabled = true;
+        await this.refreshQuota(true);
+        if (this.quotaError) vscode.window.showWarningMessage(`Claude usage unavailable: ${this.quotaError}`);
+        this.updateDashboard();
+      }
+    });
+    this.updateDashboard();
+  }
+
+  updateDashboard() {
+    if (!this.dashboardPanel) return;
+    this.dashboardPanel.webview.html = buildDashboard(this.state, {
+      provider: this.provider,
+      quotaEnabled: this.config.quotaEnabled,
+      refreshIntervalSeconds: this.config.refreshIntervalSeconds,
+      cspSource: this.dashboardPanel.webview.cspSource,
+      nonce: crypto.randomBytes(16).toString('hex')
+    });
   }
 }
 
@@ -356,6 +425,7 @@ function activate(context) {
   guard = new DrainGuard(context);
   context.subscriptions.push(
     vscode.commands.registerCommand('claudeDrainGuard.showDetails', () => guard.showDetails()),
+    vscode.commands.registerCommand('claudeDrainGuard.openDashboard', () => guard.openDashboard()),
     vscode.commands.registerCommand('claudeDrainGuard.generateReport', () => guard.openReport()),
     vscode.commands.registerCommand('claudeDrainGuard.mute', () => { guard.mutedUntil = Date.now() + 15 * 60_000; }),
     vscode.commands.registerCommand('claudeDrainGuard.resetBaseline', () => { guard.state.turns = []; guard.state.slices = []; guard.store.save(); vscode.window.showInformationMessage('Claude Drain Guard baseline reset.'); })

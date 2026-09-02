@@ -6,7 +6,7 @@ const path = require('path');
 class Store {
   constructor(file) {
     this.file = file;
-    this.state = { turns: [], slices: [], offsets: {}, seen: [], groups: {}, quotaSnapshots: [] };
+    this.state = { turns: [], slices: [], offsets: {}, seen: [], groups: {}, quotaSnapshots: [], detectorVersion: 0 };
     this.saveTimer = null;
     this.writeChain = Promise.resolve();
   }

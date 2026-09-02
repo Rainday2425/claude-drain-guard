@@ -44,11 +44,12 @@ function cusum(z, previous = 0, drift = 0.5, threshold = 5) {
 }
 
 function multivariateRisk(signals) {
-  const raw = 0.30 * Math.min(10, Math.max(0, signals.freshZ)) +
-    0.18 * Math.min(6, Math.max(0, signals.writeZ)) +
-    0.12 * Math.min(5, Math.max(0, signals.outputZ)) +
-    0.18 * Math.min(4, Math.max(0, signals.cacheDeficit)) +
-    0.12 * Math.min(4, Math.max(0, signals.cacheCliff)) +
+  const raw = 0.25 * Math.min(10, Math.max(0, signals.freshZ)) +
+    0.15 * Math.min(6, Math.max(0, signals.writeZ)) +
+    0.10 * Math.min(5, Math.max(0, signals.outputZ)) +
+    0.15 * Math.min(4, Math.max(0, signals.cacheDeficit)) +
+    0.15 * Math.min(4, Math.max(0, signals.cacheCliff)) +
+    0.20 * Math.min(8, Math.max(0, signals.cacheDropZ)) +
     (signals.pageHinkley ? 1.2 : 0) + (signals.cusum ? 1.0 : 0);
   return Math.min(100, 100 * (1 - Math.exp(-raw / 3)));
 }
@@ -69,13 +70,22 @@ function bootstrapForecast(values, periods = 6, samples = 400) {
 function analyzeTurn(turn, previousTurn, history, config, online = {}) {
   const recent = history.slice(-72);
   const freshHistory = recent.map(item => item.fresh), writeHistory = recent.map(item => item.cacheWrite), outputHistory = recent.map(item => item.output);
+  const cacheHistory = recent.map(item => item.cacheHit);
   const freshZ = robustScore(turn.fresh, freshHistory), writeZ = robustScore(turn.cacheWrite, writeHistory), outputZ = robustScore(turn.output, outputHistory);
+  const cacheDropZ = robustScore(-turn.cacheHit, cacheHistory.map(value => -value));
   const ph = pageHinkley(turn.fresh, online.pageHinkley), cs = cusum(freshZ, online.cusum);
   const cliffPoints = previousTurn ? Math.max(0, previousTurn.cacheHit - turn.cacheHit) : 0;
-  const signals = { freshZ, writeZ, outputZ, cacheDeficit: Math.max(0, (80 - turn.cacheHit) / 20), cacheCliff: cliffPoints / Math.max(1, config.cacheCliffPoints), pageHinkley: ph.changed, cusum: cs.changed };
-  const score = multivariateRisk(signals), alerts = [];
+  const cacheBaseline = median(cacheHistory);
+  const excessFresh = turn.totalInput * Math.max(0, cacheBaseline - turn.cacheHit) / 100;
+  const signals = { freshZ, writeZ, outputZ, cacheDropZ, excessFresh, cacheDeficit: Math.max(0, (80 - turn.cacheHit) / 20), cacheCliff: cliffPoints / Math.max(1, config.cacheCliffPoints), pageHinkley: ph.changed, cusum: cs.changed };
+  let score = multivariateRisk(signals); const alerts = [];
   if (turn.cacheHit < config.cacheMissPercent && turn.totalInput >= 10_000) alerts.push({ severity: 'warning', code: 'CACHE_MISS', text: `Cache hit ${turn.cacheHit.toFixed(0)}%` });
   if (cliffPoints >= config.cacheCliffPoints) alerts.push({ severity: 'critical', code: 'CACHE_CLIFF', text: `Cache fell ${Math.round(cliffPoints)} points` });
+  const baselineCollapse = cacheHistory.length >= 6 && cacheBaseline - turn.cacheHit >= config.cacheCliffPoints && cacheDropZ >= config.robustZThreshold;
+  const coldStartCollapse = cacheHistory.length < 6 && turn.cacheHit <= (config.absoluteCacheFloorPercent ?? 10);
+  if (turn.totalInput >= 10_000 && (baselineCollapse || coldStartCollapse) && !alerts.some(alert => alert.code === 'CACHE_CLIFF')) {
+    alerts.push({ severity: 'critical', code: 'CACHE_COLLAPSE', text: `Cache ${turn.cacheHit.toFixed(0)}% · ${compact(excessFresh || turn.fresh)} excess fresh tokens` });
+  }
   if (turn.fresh >= config.largeFreshTokens) alerts.push({ severity: 'critical', code: 'FRESH_SPIKE', text: `${compact(turn.fresh)} fresh tokens` });
   if (freshZ >= config.robustZThreshold) alerts.push({ severity: 'critical', code: 'ROBUST_SPIKE', text: `Fresh-token robust z=${freshZ.toFixed(1)}` });
   if (ph.changed) alerts.push({ severity: 'critical', code: 'CHANGE_POINT', text: `Page-Hinkley=${ph.statistic.toFixed(2)}` });
@@ -84,6 +94,8 @@ function analyzeTurn(turn, previousTurn, history, config, online = {}) {
   else if (recent.length >= 6 && score >= 50 && !alerts.length) alerts.push({ severity: 'warning', code: 'MULTIVARIATE', text: `Combined risk ${score.toFixed(0)}/100` });
   const baseline = median(freshHistory), recentEwma = ewma([...freshHistory.slice(-5), turn.fresh]);
   if (!alerts.length && freshHistory.length >= 6 && baseline > 0 && recentEwma >= baseline * 3) alerts.push({ severity: 'warning', code: 'BURN_ACCELERATION', text: 'Recent burn is >3× baseline' });
+  if (alerts.some(alert => alert.severity === 'critical')) score = Math.max(90, score);
+  else if (alerts.length) score = Math.max(55, score);
   return { alerts, score, signals, baseline, recentEwma, online: { pageHinkley: ph.state, cusum: cs.value }, risk: alerts.some(a => a.severity === 'critical') ? 'critical' : alerts.length ? 'warning' : 'healthy' };
 }
 

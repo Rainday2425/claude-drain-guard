@@ -6,7 +6,7 @@ const { analyzeTurn, robustScore, pageHinkley, cusum, bootstrapForecast, transit
 const { generateReport } = require('../src/report');
 const { parseQuotaHeaders, quotaDelta } = require('../src/quota');
 
-const config = { cacheMissPercent: 60, cacheCliffPoints: 40, largeFreshTokens: 100000, robustZThreshold: 4.5 };
+const config = { cacheMissPercent: 60, cacheCliffPoints: 40, largeFreshTokens: 100000, robustZThreshold: 4.5, absoluteCacheFloorPercent: 10 };
 
 test('extracts Claude usage and calculates cache hit', () => {
   const usage = usageFromEntry({ timestamp: '2026-01-01T00:00:00Z', message: { id: 'x', usage: { input_tokens: 100, cache_read_input_tokens: 800, cache_creation_input_tokens: 100, output_tokens: 20 } } });
@@ -25,6 +25,15 @@ test('detects cache cliff and fresh spike', () => {
 
 test('robust score ignores stable noise and flags spike', () => {
   assert.ok(robustScore(10000, [1000, 1050, 950, 1020, 980, 1010, 990]) > 20);
+});
+
+test('8% cache collapse is critical while 20% is not an arbitrary hard cutoff', () => {
+  const history = [94, 96, 95, 97, 94, 96, 95].map((cacheHit, index) => ({ cacheHit, fresh: 4000 + index, cacheWrite: 1000, output: 500 }));
+  const collapse = analyzeTurn({ cacheHit: 8, totalInput: 30000, fresh: 27600, cacheWrite: 3000, output: 500 }, history.at(-1), history, config);
+  assert.equal(collapse.risk, 'critical');
+  assert.ok(collapse.score >= 90);
+  const coldButNotFloor = analyzeTurn({ cacheHit: 18, totalInput: 30000, fresh: 24600, cacheWrite: 3000, output: 500 }, null, [], config);
+  assert.equal(coldButNotFloor.alerts.some(alert => alert.code === 'CACHE_COLLAPSE'), false);
 });
 
 test('aggregates five-minute slices', () => {

@@ -50,6 +50,10 @@
         "title": "Claude Drain Guard: Show Details"
       },
       {
+        "command": "claudeDrainGuard.openDashboard",
+        "title": "Claude Drain Guard: Open Dashboard"
+      },
+      {
         "command": "claudeDrainGuard.generateReport",
         "title": "Claude Drain Guard: Generate Incident Report"
       },
@@ -96,6 +100,13 @@
           "minimum": 5,
           "maximum": 100
         },
+        "claudeDrainGuard.absoluteCacheFloorPercent": {
+          "type": "number",
+          "default": 10,
+          "minimum": 0,
+          "maximum": 50,
+          "description": "Cold-start safety floor used only before enough personal cache history exists."
+        },
         "claudeDrainGuard.largeFreshTokens": {
           "type": "number",
           "default": 100000,
@@ -123,8 +134,8 @@
         },
         "claudeDrainGuard.authoritativeQuota.enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "Opt in to a minimal Anthropic Messages request, at most once per five minutes, to read authoritative 5h/7d rate-limit headers. This consumes a tiny amount of quota."
+          "default": true,
+          "description": "Read authoritative 5h/7d rate-limit headers using a minimal Anthropic Messages request at most once per five minutes. Disable for local-only monitoring. This consumes a tiny amount of quota."
         },
         "claudeDrainGuard.authoritativeQuota.credentialsPath": {
           "type": "string",

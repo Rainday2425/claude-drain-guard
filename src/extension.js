@@ -41,7 +41,7 @@ class DrainGuard {
       quotaEnabled: c.get('authoritativeQuota.enabled', false),
       quotaCredentials: c.get('authoritativeQuota.credentialsPath', ''),
       quotaSpikePercent: c.get('authoritativeQuota.sliceSpikePercent', 2) / 100,
-      alignment: c.get('statusBarAlignment', 'right')
+      alignment: c.get('statusBarAlignment', 'left')
     };
   }
 
@@ -153,7 +153,7 @@ class DrainGuard {
 
   render(turn, analysis) {
     if (!turn) {
-      this.status.text = '$(shield) Guard · idle';
+      this.status.text = '$(pulse) Claude —';
       this.status.tooltip = `Claude Drain Guard\nWaiting for Claude Code activity.`;
       this.status.backgroundColor = undefined;
       return;
@@ -163,10 +163,10 @@ class DrainGuard {
     const delta = quota?.delta5h;
     const quotaPart = quota ? `5h ${(quota.utilization5h * 100).toFixed(0)}%` : '5h —';
     this.status.text = risk === 'critical'
-      ? `$(error) STOP · ${delta !== null && delta !== undefined ? `5h +${(delta * 100).toFixed(1)}%` : `Cache ${turn.cacheHit.toFixed(0)}%`}`
+      ? `$(error) ${delta !== null && delta !== undefined ? `5h +${(delta * 100).toFixed(1)}% / 5m` : `cache ${turn.cacheHit.toFixed(0)}%`}`
       : risk === 'warning'
-        ? `$(warning) WATCH · Cache ${turn.cacheHit.toFixed(0)}%`
-        : `$(shield-check) ${quotaPart} · Cache ${turn.cacheHit.toFixed(0)}%`;
+        ? `$(warning) cache ${turn.cacheHit.toFixed(0)}% · ${compact(this.state.slices.at(-1)?.fresh || 0)} / 5m`
+        : `$(pulse) ${quotaPart} · cache ${turn.cacheHit.toFixed(0)}%`;
     this.status.backgroundColor = risk === 'critical' ? new vscode.ThemeColor('statusBarItem.errorBackground') : risk === 'warning' ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
     this.status.color = undefined;
     const tooltip = this.tooltip(turn, analysis);
@@ -175,18 +175,16 @@ class DrainGuard {
 
   tooltip(turn, analysis) {
     const slice = this.state.slices.at(-1);
-    const issues = (analysis.alerts || []).map(a => `- **${a.code}** — ${a.text}`).join('\n') || 'No anomaly detected.';
+    const issues = (analysis.alerts || []).map(a => a.text).join(' · ') || 'No anomaly detected';
     const quota = this.state.quotaSnapshots.at(-1);
     const risk = analysis.displayRisk || analysis.risk;
-    const heading = risk === 'critical' ? 'STOP — drain detected' : risk === 'warning' ? 'WATCH — unusual activity' : 'Healthy';
+    const heading = risk === 'critical' ? 'Critical drain risk' : risk === 'warning' ? 'Elevated usage' : 'Normal';
     const quotaRow = quota ? `${(quota.utilization5h * 100).toFixed(1)}%${quota.delta5h === null || quota.delta5h === undefined ? '' : ` (+${(quota.delta5h * 100).toFixed(1)} pts / 5m)`}` : this.config.quotaEnabled ? 'Unavailable' : 'Off';
-    const next = analysis.forecast ? `${compact(analysis.forecast.p50)} median / ${compact(analysis.forecast.p90)} p90` : 'Learning';
     const markdown = new vscode.MarkdownString(undefined, true);
-    markdown.appendMarkdown(`### Claude Drain Guard · ${heading}\n\n`);
-    if (risk === 'critical') markdown.appendMarkdown('**Pause before sending another prompt. Open the incident details first.**\n\n');
-    markdown.appendMarkdown(`| | Current |\n|---|---:|\n| **5-hour allowance** | ${quotaRow} |\n| **Cache hit** | ${turn.cacheHit.toFixed(1)}% |\n| **Five-minute fresh input** | ${compact(slice?.fresh || 0)} · ${slice?.calls || 0} calls |\n| **Risk score** | ${Math.round(analysis.score || 0)} / 100 |\n| **Next 30 minutes** | ${next} |\n\n`);
-    if (analysis.alerts?.length) markdown.appendMarkdown(`**What changed**\n\n${issues}\n\n`);
-    markdown.appendMarkdown(`---\n\n_${turn.model} · ${turn.project} · ${turn.contextBucket} context · click for recent activity_`);
+    markdown.appendMarkdown(`**Claude Drain Guard — ${heading}**\n\n`);
+    markdown.appendMarkdown(`5h ${quotaRow} · cache ${turn.cacheHit.toFixed(0)}% · fresh ${compact(slice?.fresh || 0)} / 5m\n\n`);
+    if (analysis.alerts?.length) markdown.appendMarkdown(`${issues}\n\n`);
+    markdown.appendMarkdown(`_${turn.model} · ${turn.project} · click for details and report_`);
     return markdown;
   }
 
@@ -223,7 +221,7 @@ class DrainGuard {
   showDetails() {
     const turns = this.state.turns.slice(-10).reverse();
     const items = turns.map(t => ({
-      label: `${t.risk === 'critical' ? '$(error)' : t.risk === 'warning' ? '$(warning)' : '$(check)'} ${new Date(t.timestamp).toLocaleTimeString()} · ${t.risk === 'critical' ? 'Critical' : t.risk === 'warning' ? 'Watch' : 'Healthy'}`,
+      label: `${t.risk === 'critical' ? '$(error)' : t.risk === 'warning' ? '$(warning)' : '$(pulse)'} ${new Date(t.timestamp).toLocaleTimeString()} · ${t.risk === 'critical' ? 'Critical' : t.risk === 'warning' ? 'Elevated' : 'Normal'}`,
       description: `Cache ${t.cacheHit.toFixed(0)}% · ${compact(t.fresh)} fresh`,
       detail: `${t.model} · risk ${Math.round(t.riskScore || 0)}/100${t.alerts?.length ? ` · ${t.alerts.map(a => a.code).join(', ')}` : ''}`,
       turn: t

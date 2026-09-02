@@ -1,6 +1,6 @@
 # Claude Drain Guard
 
-![SAFE, WATCH, and STOP status-bar states](images/states.png)
+![Claude-style compact status line](images/states.png)
 
 A zero-dependency VS Code extension that watches Claude Code locally, aggregates five-minute slices, and tells you to stop after the first anomalous prompt—before the next few prompts drain the session.
 
@@ -8,9 +8,9 @@ A zero-dependency VS Code extension that watches Claude Code locally, aggregates
 
 One progressive status item keeps healthy sessions quiet and makes danger obvious:
 
-- Healthy: `5h 31% · Cache 97%`
-- Warning: `WATCH · Cache 54%`
-- Critical: `STOP · 5h +5.1%`
+- Normal: `5h 31% · cache 97%`
+- Elevated: `cache 54% · 120k / 5m`
+- Critical: `5h +5.1% / 5m`
 
 ## Signals
 
@@ -24,14 +24,14 @@ One progressive status item keeps healthy sessions quiet and makes danger obviou
 - Deterministic bootstrap 30-minute burn forecast with p50/p90 bounds
 - Hysteresis and notification cooldown to suppress alert flapping
 - Compact status bar: `5m fresh tokens · cache hit · risk score`
-- Progressive-disclosure status bar with separate `SAFE/WATCH/STOP`, five-hour gauge, and cache items
-- Markdown hover card that leads with action, then a signal table and explanations
+- Claude-style single-line status item with one Codicon and native VS Code warning states
+- Compact native hover for the current slice; detailed evidence stays in VS Code Quick Pick
 - Acknowledgement-required critical alert after the first anomalous turn
 - Automatic local Markdown incident report with recent turns and five-minute slices
 
 No prompts, source code, credentials, or telemetry are collected. Local monitoring is the default. In v0.4, users may explicitly opt in to an authoritative quota adapter: it reads the existing Claude OAuth token in memory, makes at most one minimal 1-token Haiku request per five minutes after local Claude activity, reads only rate-limit response headers, never persists the token, and falls back safely to local detection on failure. This optional request consumes a tiny amount of quota.
 
-![Critical drain hover with evidence](images/incident.png)
+![Native recent-activity picker with evidence](images/incident.png)
 
 ## Development
 

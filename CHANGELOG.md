@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1
+
+- Restyled the status item after Claude Code's compact, metric-first status-line pattern.
+- Removed slogan-like SAFE/WATCH/STOP labels and all emoji-style presentation.
+- Defaulted the workspace-wide item to the left side per VS Code UX guidance.
+
 ## 0.6.0
 
 - Replaced three competing status items with one cohesive, progressive status item.

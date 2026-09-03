@@ -22,9 +22,9 @@ async function recentJsonl(root, cutoff = Date.now() - 48 * 60 * 60_000) {
 
 async function readJsonlIncrement(file, previousOffset, onEntry, highWaterMark = 256 * 1024) {
   let stat;
-  try { stat = await fs.promises.stat(file); } catch { return { offset: previousOffset, processed: 0, missing: true }; }
+  try { stat = await fs.promises.stat(file); } catch { return { offset: previousOffset, processed: 0, missing: true, mtimeMs: 0 }; }
   let offset = stat.size < previousOffset ? 0 : previousOffset;
-  if (stat.size === offset) return { offset, processed: 0, missing: false };
+  if (stat.size === offset) return { offset, processed: 0, missing: false, mtimeMs: stat.mtimeMs };
 
   const stream = fs.createReadStream(file, { start: offset, end: stat.size - 1, highWaterMark });
   let parts = [], pendingLength = 0, committed = offset, processed = 0;
@@ -52,7 +52,7 @@ async function readJsonlIncrement(file, previousOffset, onEntry, highWaterMark =
     const tail = Buffer.concat(parts, pendingLength).toString('utf8').replace(/\r$/, '');
     try { if (onEntry(JSON.parse(tail))) processed++; committed = stat.size; } catch { /* incomplete tail: retry later */ }
   } else committed = stat.size;
-  return { offset: committed, processed, missing: false };
+  return { offset: committed, processed, missing: false, mtimeMs: stat.mtimeMs };
 }
 
 module.exports = { recentJsonl, readJsonlIncrement };

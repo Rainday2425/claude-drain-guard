@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.4
+
+- Added an Ongoing session card keyed by the active Claude JSONL session, with totals and one bar per completed API response.
+- Added exact token/cache/output/cost hover data to session bars and exact bucket data to the 24-hour chart.
+- Added numeric chart scale labels plus total and peak values so bars are not decorative-only.
+- Server-rendered the initial 5-minute bars so the chart remains populated even before its Webview script runs.
+- Backfilled missing current buckets directly from turns when a five-minute slice has not been written yet.
+- Associated records saved by earlier versions with the latest contiguous project run without replaying or duplicating historical data.
+
 ## 0.8.3
 
 - Grouped consecutive anomalous turns into incidents so one drain episode produces one dashboard row.

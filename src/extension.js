@@ -33,6 +33,7 @@ class DrainGuard {
     this.activeFiles = new Set();
     this.pendingFiles = new Set();
     this.seenIds = new Set(this.state.seen);
+    this.sessionFiles = new Map();
     this.scanPromise = null;
     const restored = this.state.turns.at(-1);
     if (restored) {
@@ -177,6 +178,7 @@ class DrainGuard {
       }
     }
     if (offsetsChanged) this.store.scheduleSave();
+    if (offsetsChanged) this.updateDashboard();
     if (totalChanges > 0 && !this.bootstrapping) this.refreshQuota();
     return totalChanges;
   }
@@ -184,14 +186,21 @@ class DrainGuard {
   async readIncrement(file) {
     const previousOffset = this.state.offsets[file] || 0;
     const result = await readJsonlIncrement(file, previousOffset, entry => this.processEntry(entry, file));
-    if (result.missing) this.activeFiles.delete(file);
-    else this.state.offsets[file] = result.offset;
+    const sessionId = sessionFromPath(file);
+    if (result.missing) {
+      this.activeFiles.delete(file);
+      this.sessionFiles.delete(sessionId);
+    } else {
+      this.state.offsets[file] = result.offset;
+      this.sessionFiles.set(sessionId, { sessionId, project: projectFromPath(file, path.join(this.config.dataDirectory, 'projects')), lastActivity: result.mtimeMs || 0 });
+    }
     return { processed: result.processed, offsetChanged: result.offset !== previousOffset };
   }
 
   processEntry(entry, file) {
     const turn = usageFromEntry(entry);
-    if (!turn || (turn.id && this.seenIds.has(turn.id))) return 0;
+    if (!turn) return 0;
+    if (turn.id && this.seenIds.has(turn.id)) return 0;
     this.processTurn(turn, file);
     if (turn.id) {
       this.seenIds.add(turn.id);
@@ -201,6 +210,7 @@ class DrainGuard {
   }
 
   processTurn(turn, file) {
+    turn.sessionId = sessionFromPath(file);
     turn.costUsd = estimateTurnCost(turn, fallbackCostTtl(turn, this.provider, this.config.costFallbackTtl), this.provider);
     turn.costSource = costSource(turn, this.provider);
     turn.project = projectFromPath(file, path.join(this.config.dataDirectory, 'projects'));
@@ -436,7 +446,8 @@ class DrainGuard {
       displayRisk: this.lastAnalysis?.displayRisk || this.lastAnalysis?.risk,
       refreshIntervalSeconds: this.config.refreshIntervalSeconds,
       cspSource: this.dashboardPanel.webview.cspSource,
-      nonce: crypto.randomBytes(16).toString('hex')
+      nonce: crypto.randomBytes(16).toString('hex'),
+      sessions: [...this.sessionFiles.values()]
     });
   }
 
@@ -461,6 +472,10 @@ class DrainGuard {
 function projectFromPath(file, projectsRoot) {
   const relative = path.relative(projectsRoot, file);
   return relative.split(path.sep)[0] || 'unknown';
+}
+
+function sessionFromPath(file) {
+  return path.basename(file, path.extname(file));
 }
 
 function fallbackCostTtl(turn, provider, configured = 'auto') {

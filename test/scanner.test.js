@@ -18,6 +18,7 @@ test('incremental scanner commits CRLF bytes and preserves an incomplete tail', 
   const one = await readJsonlIncrement(file, 0, entry => entries.push(entry), 5);
   assert.deepEqual(entries, [{ id: 1, text: 'héllo' }]);
   assert.equal(one.offset, Buffer.byteLength(first));
+  assert.ok(one.mtimeMs > 0);
   fs.appendFileSync(file, '}\n');
   const two = await readJsonlIncrement(file, one.offset, entry => entries.push(entry), 3);
   assert.deepEqual(entries.at(-1), { id: 2 });

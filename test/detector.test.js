@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { usageFromEntry, mergeSlice } = require('../src/metrics');
 const { analyzeTurn, robustScore, pageHinkley, cusum, bootstrapForecast, transitionAlertState } = require('../src/detector');
 const { generateReport } = require('../src/report');
-const { parseOAuthUsage, parseQuotaHeaders, quotaDelta } = require('../src/quota');
+const { parseOAuthUsage, parseQuotaHeaders, quotaDelta, rolloverQuota } = require('../src/quota');
 
 const config = { cacheMissPercent: 60, cacheCliffPoints: 40, largeFreshTokens: 100000, robustZThreshold: 4.5, absoluteCacheFloorPercent: 10 };
 
@@ -49,6 +49,16 @@ test('a relative statistical shift without high absolute drain is not critical',
   const result = analyzeTurn({ cacheHit: 98, totalInput: 650000, fresh: 13000, cacheWrite: 100, output: 200 }, history.at(-1), history, config);
   assert.notEqual(result.risk, 'critical');
   assert.equal(result.alerts.some(alert => alert.severity === 'critical'), false);
+});
+
+test('a cache warm-up does not alert unless fresh input is independently large', () => {
+  const previous = { cacheHit: 100, timestamp: 1 };
+  const warmup = analyzeTurn({ cacheHit: 0, totalInput: 50000, fresh: 50000, cacheWrite: 49000, output: 100, cacheWarmup: true }, previous, [], config);
+  assert.equal(warmup.risk, 'healthy');
+  assert.equal(warmup.alerts.length, 0);
+  const drain = analyzeTurn({ cacheHit: 0, totalInput: 200000, fresh: 200000, cacheWrite: 190000, output: 100, cacheWarmup: true }, previous, [], config);
+  assert.equal(drain.risk, 'critical');
+  assert.deepEqual(drain.alerts.map(alert => alert.code), ['FRESH_SPIKE']);
 });
 
 test('aggregates five-minute slices', () => {
@@ -125,4 +135,15 @@ test('parses authoritative quota headers and rejects cross-window deltas', () =>
   assert.equal(current.utilization5h, 0.42);
   assert.ok(Math.abs(quotaDelta({ utilization5h: 0.39, reset5hAt: current.reset5hAt }, current) - 0.03) < 1e-9);
   assert.equal(quotaDelta({ utilization5h: 0.9, reset5hAt: 123 }, current), null);
+});
+
+test('an expired 5h snapshot rolls to a new local zero window immediately', () => {
+  const previous = { timestamp: 1, utilization5h: 1, utilization7d: 0.5, reset5hAt: 1000, source: 'oauth-usage', status: 'denied' };
+  const current = rolloverQuota(previous, 1001);
+  assert.notEqual(current, previous);
+  assert.equal(current.utilization5h, 0);
+  assert.equal(current.utilization7d, 0.5);
+  assert.equal(current.source, 'local-window-reset');
+  assert.equal(current.status, 'allowed');
+  assert.equal(rolloverQuota(previous, 999), previous);
 });

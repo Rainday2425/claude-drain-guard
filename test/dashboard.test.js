@@ -27,6 +27,9 @@ test('dashboard renders metrics, controls, chart, and escaped anomaly evidence',
   assert.match(html, /data-bucket="60"/);
   assert.match(html, /Cache collapse/);
   assert.doesNotMatch(html, /<cache collapse>/);
+  const script = html.match(/<script[^>]*>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script);
+  assert.doesNotThrow(() => new Function(script));
 });
 
 test('dashboard offers one-click usage connection when OAuth data is unavailable', () => {

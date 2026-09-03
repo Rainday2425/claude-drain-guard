@@ -9,7 +9,7 @@ const { usageFromEntry, mergeSlice } = require('./metrics');
 const { analyzeTurn, bootstrapForecast, transitionAlertState, compact } = require('./detector');
 const { Store } = require('./store');
 const { generateReport } = require('./report');
-const { fetchQuota, quotaDelta, defaultCredentials } = require('./quota');
+const { fetchQuota, quotaDelta, rolloverQuota, defaultCredentials } = require('./quota');
 const { recentJsonl, readJsonlIncrement } = require('./scanner');
 const { detectProvider, formatStatus } = require('./display');
 const { buildDashboard } = require('./dashboard');
@@ -30,6 +30,7 @@ class DrainGuard {
     this.mutedUntil = 0;
     this.alertState = { level: 'healthy', healthyStreak: 0 };
     this.scanTimer = null;
+    this.quotaResetTimer = null;
     this.activeFiles = new Set();
     this.pendingFiles = new Set();
     this.seenIds = new Set(this.state.seen);
@@ -112,7 +113,11 @@ class DrainGuard {
         this.lastAnalysis.forecast = bootstrapForecast(this.state.slices.slice(-12).map(slice => slice.fresh));
         this.render(turn, this.lastAnalysis);
       } else this.render(null, { risk: 'idle', alerts: [] });
-      if (this.config.quotaEnabled) this.refreshQuota();
+      if (this.config.quotaEnabled) {
+        const expired = this.applyExpiredQuota();
+        this.scheduleQuotaReset(this.state.quotaSnapshots.at(-1));
+        this.refreshQuota(expired);
+      }
     });
   }
 
@@ -131,6 +136,7 @@ class DrainGuard {
       clearInterval(this.refreshTimer);
       clearInterval(this.discoveryTimer);
       clearTimeout(this.scanTimer);
+      clearTimeout(this.quotaResetTimer);
     } });
   }
 
@@ -211,9 +217,18 @@ class DrainGuard {
 
   processTurn(turn, file) {
     turn.sessionId = sessionFromPath(file);
+    turn.project = projectFromPath(file, path.join(this.config.dataDirectory, 'projects'));
+    const reverseTurns = [...this.state.turns].reverse();
+    const previousSessionTurn = reverseTurns.find(item => item.sessionId === turn.sessionId);
+    const previousComparable = previousSessionTurn || reverseTurns.find(item => !item.sessionId && item.project === turn.project);
+    const sessionFirst = !previousSessionTurn;
+    // Five minutes is the shortest normal Claude prompt-cache TTL. After that
+    // gap, one cache-only miss may be a legitimate rebuild; a second miss is
+    // analyzed normally. Fresh-token spikes are never suppressed.
+    const longIdle = previousComparable && turn.timestamp - previousComparable.timestamp >= 5 * 60_000;
+    turn.cacheWarmup = Boolean(sessionFirst || longIdle);
     turn.costUsd = estimateTurnCost(turn, fallbackCostTtl(turn, this.provider, this.config.costFallbackTtl), this.provider);
     turn.costSource = costSource(turn, this.provider);
-    turn.project = projectFromPath(file, path.join(this.config.dataDirectory, 'projects'));
     turn.contextBucket = `${Math.floor(turn.totalInput / 50_000) * 50}k`;
     turn.cacheState = turn.cacheHit < this.config.cacheMissPercent ? 'miss' : 'warm';
     turn.groupKey = `${turn.model}|${turn.project}|${turn.contextBucket}`;
@@ -257,12 +272,14 @@ class DrainGuard {
   }
 
   acceptQuota(current, previous = this.state.quotaSnapshots.at(-1)) {
+    current = rolloverQuota(current);
     this.quotaError = null;
     this.provider = 'claude-ai';
     const delta = quotaDelta(previous, current);
     current.delta5h = delta;
     this.state.quotaSnapshots.push(current);
     this.state.quotaSnapshots = this.state.quotaSnapshots.slice(-288);
+    this.scheduleQuotaReset(current);
     this.store.scheduleSave();
     const turn = this.state.turns.at(-1);
     if (!turn) { this.render(null, { risk: 'idle', alerts: [] }); return; }
@@ -278,6 +295,31 @@ class DrainGuard {
       this.render(turn, analysis);
       if (!this.bootstrapping && Date.now() >= this.mutedUntil) this.alert(turn, analysis);
     } else if (this.lastAnalysis) this.render(turn, this.lastAnalysis);
+  }
+
+  applyExpiredQuota() {
+    const previous = this.state.quotaSnapshots.at(-1);
+    const current = rolloverQuota(previous);
+    if (!previous || current === previous) return false;
+    this.state.quotaSnapshots.push(current);
+    this.state.quotaSnapshots = this.state.quotaSnapshots.slice(-288);
+    this.store.scheduleSave();
+    const turn = this.state.turns.at(-1);
+    if (turn && this.lastAnalysis) this.render(turn, this.lastAnalysis);
+    else this.render(null, { risk: 'idle', alerts: [] });
+    return true;
+  }
+
+  scheduleQuotaReset(snapshot) {
+    clearTimeout(this.quotaResetTimer);
+    this.quotaResetTimer = null;
+    if (!snapshot?.reset5hAt || snapshot.reset5hAt <= Date.now()) return;
+    const delay = Math.min(2_147_000_000, Math.max(250, snapshot.reset5hAt - Date.now() + 250));
+    this.quotaResetTimer = setTimeout(() => {
+      this.applyExpiredQuota();
+      this.updateDashboard();
+      this.refreshQuota(true);
+    }, delay);
   }
 
   render(turn, analysis) {

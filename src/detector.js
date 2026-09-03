@@ -84,23 +84,25 @@ function analyzeTurn(turn, previousTurn, history, config, online = {}) {
   const cliffPoints = previousTurn ? Math.max(0, previousTurn.cacheHit - turn.cacheHit) : 0;
   const cacheBaseline = median(cacheHistory);
   const excessFresh = turn.totalInput * Math.max(0, cacheBaseline - turn.cacheHit) / 100;
-  const signals = { freshZ, writeZ, outputZ, cacheDropZ, excessFresh, cacheDeficit: Math.max(0, (80 - turn.cacheHit) / 20), cacheCliff: cliffPoints / Math.max(1, config.cacheCliffPoints), pageHinkley: ph.changed, cusum: cs.changed };
+  const warmup = Boolean(turn.cacheWarmup);
+  const signals = { freshZ, writeZ, outputZ, cacheDropZ, excessFresh, cacheWarmup: warmup, cacheDeficit: Math.max(0, (80 - turn.cacheHit) / 20), cacheCliff: cliffPoints / Math.max(1, config.cacheCliffPoints), pageHinkley: ph.changed, cusum: cs.changed };
   let score = multivariateRisk(signals); const alerts = [];
-  if (turn.totalInput >= 10_000 && cliffPoints >= config.cacheCliffPoints) alerts.push({ severity: 'critical', code: 'CACHE_CLIFF', text: `Cache ${previousTurn.cacheHit.toFixed(0)}%→${turn.cacheHit.toFixed(0)}% · ${compact(turn.fresh)} uncached` });
+  if (!warmup && turn.totalInput >= 10_000 && cliffPoints >= config.cacheCliffPoints) alerts.push({ severity: 'critical', code: 'CACHE_CLIFF', text: `Cache ${previousTurn.cacheHit.toFixed(0)}%→${turn.cacheHit.toFixed(0)}% · ${compact(turn.fresh)} uncached` });
   const baselineCollapse = cacheHistory.length >= 6 && cacheBaseline - turn.cacheHit >= config.cacheCliffPoints && cacheDropZ >= config.robustZThreshold;
-  const coldStartCollapse = cacheHistory.length < 6 && turn.cacheHit <= (config.absoluteCacheFloorPercent ?? 10);
+  const coldStartCollapse = !warmup && cacheHistory.length < 6 && turn.cacheHit <= (config.absoluteCacheFloorPercent ?? 10);
   if (turn.totalInput >= 10_000 && (baselineCollapse || coldStartCollapse) && !alerts.some(alert => alert.code === 'CACHE_CLIFF')) {
     const uncached = baselineCollapse ? excessFresh : turn.fresh;
     alerts.push({ severity: 'critical', code: 'CACHE_COLLAPSE', text: `Cache collapsed to ${turn.cacheHit.toFixed(0)}% · ${compact(uncached)} uncached` });
   }
-  if (turn.cacheHit < config.cacheMissPercent && turn.totalInput >= 10_000 && !alerts.some(alert => alert.code.startsWith('CACHE_'))) alerts.push({ severity: 'warning', code: 'CACHE_MISS', text: `Cache hit ${turn.cacheHit.toFixed(0)}%` });
+  if (!warmup && turn.cacheHit < config.cacheMissPercent && turn.totalInput >= 10_000 && !alerts.some(alert => alert.code.startsWith('CACHE_'))) alerts.push({ severity: 'warning', code: 'CACHE_MISS', text: `Cache hit ${turn.cacheHit.toFixed(0)}%` });
   if (turn.fresh >= config.largeFreshTokens) alerts.push({ severity: 'critical', code: 'FRESH_SPIKE', text: `${compact(turn.fresh)} fresh input` });
-  else if (freshZ >= config.robustZThreshold) alerts.push({ severity: 'warning', code: 'ROBUST_SPIKE', text: `Fresh input unusually high for this workload` });
-  else if (ph.changed) alerts.push({ severity: 'warning', code: 'CHANGE_POINT', text: `Fresh-input pattern shifted` });
-  else if (cs.changed) alerts.push({ severity: 'warning', code: 'CUSUM', text: `Fresh-input drift detected` });
-  if (recent.length >= 6 && score >= 50 && !alerts.length) alerts.push({ severity: 'warning', code: 'MULTIVARIATE', text: `Combined anomaly ${score.toFixed(0)}/100` });
+  else if (!warmup && freshZ >= config.robustZThreshold) alerts.push({ severity: 'warning', code: 'ROBUST_SPIKE', text: `Fresh input unusually high for this workload` });
+  else if (!warmup && ph.changed) alerts.push({ severity: 'warning', code: 'CHANGE_POINT', text: `Fresh-input pattern shifted` });
+  else if (!warmup && cs.changed) alerts.push({ severity: 'warning', code: 'CUSUM', text: `Fresh-input drift detected` });
+  if (!warmup && recent.length >= 6 && score >= 50 && !alerts.length) alerts.push({ severity: 'warning', code: 'MULTIVARIATE', text: `Combined anomaly ${score.toFixed(0)}/100` });
   const baseline = median(freshHistory), recentEwma = ewma([...freshHistory.slice(-5), turn.fresh]);
-  if (!alerts.length && freshHistory.length >= 6 && baseline > 0 && recentEwma >= baseline * 3) alerts.push({ severity: 'warning', code: 'BURN_ACCELERATION', text: 'Recent burn is >3× baseline' });
+  if (!warmup && !alerts.length && freshHistory.length >= 6 && baseline > 0 && recentEwma >= baseline * 3) alerts.push({ severity: 'warning', code: 'BURN_ACCELERATION', text: 'Recent burn is >3× baseline' });
+  if (warmup && !alerts.length) score = 0;
   if (alerts.some(alert => alert.severity === 'critical')) score = Math.max(90, score);
   else if (alerts.length) score = Math.max(55, score);
   return { alerts, score, signals, baseline, recentEwma, online: { pageHinkley: ph.state, cusum: cs.value }, risk: alerts.some(a => a.severity === 'critical') ? 'critical' : alerts.length ? 'warning' : 'healthy' };

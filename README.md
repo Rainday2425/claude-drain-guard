@@ -4,9 +4,9 @@ A zero-dependency VS Code extension that watches Claude Code locally, aggregates
 
 ## Install or update
 
-Install **Claude Drain Guard 0.8.4** from the Visual Studio Marketplace, or open **Extensions: Install from VSIX...** in VS Code and select the `0.8.4` VSIX package.
+Install **Claude Drain Guard 0.8.5** from the Visual Studio Marketplace, or open **Extensions: Install from VSIX...** in VS Code and select the `0.8.5` VSIX package.
 
-Marketplace releases are immutable: an uploaded package cannot be replaced. Use `0.8.4` for live-session visibility and data-bearing interactive charts.
+Marketplace releases are immutable: an uploaded package cannot be replaced. Use `0.8.5` for working chart hover, live-session visibility, and data-bearing interactive charts.
 
 ## Status bar
 
@@ -44,6 +44,8 @@ Quota display adapts to the available data: Claude.ai 5h/7d, 5h-only, stale quot
 Click the status item or run **Claude Drain Guard: Open Dashboard**. The first card is the current Claude Code session, detected from the most recently active JSONL session file. It shows session totals and one bar per completed API response. Hover a bar for its exact fresh input, cache hit, output, time, and cost. Records created by older releases are associated with the latest contiguous project run without rescanning or duplicating historical data.
 
 The 24-hour chart switches between 5-minute, 30-minute, and 1-hour buckets and uses a log scale so ordinary activity remains visible beside a large spike. It includes numeric scale labels, total/peak values, and detailed hover data. The initial 5-minute bars are rendered before Webview JavaScript runs, and current-session turns backfill a bucket if its aggregate slice is not available yet. Consecutive anomalous turns are grouped into one incident with aggregate fresh tokens and cost instead of filling the table with repeated rows. Prompt and response content is never shown.
+
+The cached 5-hour usage snapshot has its own reset timer. When its published reset time arrives, the status bar moves the expired window from 100% to a new local 0% window immediately and performs a read-only background refresh; it no longer waits for the next prompt. Five-hour quota rollover does not imply prompt-cache expiry and does not affect anomaly classification. The first response in a new session or after at least five idle minutes is treated as a possible cache rebuild: a transient 0% cache hit alone does not alert, while a second consecutive miss or an independently large fresh-token spike still does.
 
 Cost follows the mature [ccusage auto strategy](https://github.com/ccusage/ccusage/blob/main/docs/guide/cost-modes.md): use Claude Code's reported per-entry estimate when available, otherwise multiply input, output, cache-read, 5-minute cache-write, and 1-hour cache-write tokens by the matching [official model rates](https://platform.claude.com/docs/en/about-claude/pricing). It is an API-equivalent impact estimate, not a Claude Max invoice and not a conversion to the 5-hour quota. If old records omit the TTL breakdown, the default fallback is the standard 5-minute cache-write rate and can be changed with `claudeDrainGuard.cost.fallbackCacheTtl`. Cloud-provider and fast-mode fallbacks are deliberately left unavailable unless Claude Code reports their cost, avoiding a misleading first-party estimate.
 

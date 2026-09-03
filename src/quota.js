@@ -80,6 +80,19 @@ function quotaDelta(previous, current) {
   return delta >= 0 ? delta : null;
 }
 
+function rolloverQuota(snapshot, now = Date.now()) {
+  if (!snapshot?.reset5hAt || now < snapshot.reset5hAt || snapshot.source === 'local-window-reset') return snapshot;
+  return {
+    ...snapshot,
+    timestamp: now,
+    utilization5h: 0,
+    reset5hAt: 0,
+    delta5h: null,
+    status: 'allowed',
+    source: 'local-window-reset'
+  };
+}
+
 function defaultCredentials(dataDirectory, configured = '') {
   if (configured) return configured;
   const candidates = [
@@ -91,4 +104,4 @@ function defaultCredentials(dataDirectory, configured = '') {
   return candidates.find(candidate => fs.existsSync(candidate)) || candidates[0];
 }
 
-module.exports = { readAccessToken, normalizeUtilization, parseReset, parseOAuthUsage, parseQuotaHeaders, fetchQuota, quotaDelta, defaultCredentials };
+module.exports = { readAccessToken, normalizeUtilization, parseReset, parseOAuthUsage, parseQuotaHeaders, fetchQuota, quotaDelta, rolloverQuota, defaultCredentials };

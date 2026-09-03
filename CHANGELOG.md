@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.5
+
+- Fixed a generated Webview-script syntax error that disabled custom chart hover and bucket switching.
+- Added native title tooltips to every server-rendered and dynamically rendered bar as a no-script fallback.
+- Added a regression test that compiles the final generated Webview script instead of checking HTML strings only.
+- Added a reset-time timer that clears an expired 100% five-hour window to 0% and refreshes usage without waiting for a prompt.
+- Suppressed one cache-only alert at a new session or after the shortest normal cache TTL while preserving large fresh-input alerts; quota rollover remains independent from cache classification.
+
 ## 0.8.4
 
 - Added an Ongoing session card keyed by the active Claude JSONL session, with totals and one bar per completed API response.
